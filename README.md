@@ -4,6 +4,19 @@ A standalone, offline native Android app. Open this project in Android Studio.
 There is no in-app account, advertising, analytics, network permission,
 or finite puzzle pack.
 
+## Download
+
+Download **Sudoku-1.0.apk** from the
+[latest GitHub Release](https://github.com/mikeliddle/Sudoku/releases/latest).
+It is a signed sideload build for Android 10 and newer; no app store or account
+is needed. Open the downloaded APK to install, allowing installation from that
+specific browser/file manager only if Android requests it. Do not bypass
+Play Protect or other unsafe-app warnings.
+
+The release includes a SHA-256 checksum. APKs and signing keys are not checked
+into the repository. The official release cannot update a differently signed
+development installation; preserve any development saves before switching.
+
 ## Play
 
 The app opens on the difficulty-selection menu. **Resume** continues your unfinished
