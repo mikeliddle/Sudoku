@@ -928,6 +928,86 @@ public final class DeviceTests extends InstrumentationTestCase {
         }
     }
 
+    public void testSwatchColorsStayStableAcrossSelections() throws Throwable {
+        Game fixture = focused();
+        fixture.setAutoNotes(true);
+        fixture.elapsedMillis = 63000;
+        for (boolean dark : new boolean[]{false, true}) {
+            write(fixture);
+            assertTrue(settings().edit().putInt("appearance", dark ? 2 : 1)
+                    .putInt("accentColor", 3).putLong("bestTime.HARD", 290000).commit());
+            launch(); clickPrefix("Resume "); clickText("Settings");
+            Game paused = saved();
+            assertStableSwatches(dark, 3);
+            for (int from = 0; from < MainActivity.COLOR_NAMES.length; from++) {
+                for (int to = 0; to < MainActivity.COLOR_NAMES.length; to++) {
+                    selectSwatch(from);
+                    assertStableSwatches(dark, from);
+                    selectSwatch(to);
+                    assertStableSwatches(dark, to);
+                    assertStateEquals(paused, saved());
+                    assertEquals(paused.elapsedMillis, saved().elapsedMillis);
+                    assertEquals(dark ? 2 : 1, settings().getInt("appearance", -1));
+                    assertEquals(290000L, settings().getLong("bestTime.HARD", -1));
+                }
+            }
+            recreate();
+            assertStableSwatches(dark, 7);
+            ImageButton orange = (ImageButton) findNamed(activity.getWindow().getDecorView(), "Orange");
+            getInstrumentation().runOnMainSync(() -> orange.requestRectangleOnScreen(
+                    new Rect(0, 0, orange.getWidth(), orange.getHeight()), true));
+            capture("sudoku-stable-swatches-" + (dark ? "dark" : "light") + ".png");
+            finishActivity();
+        }
+    }
+
+    private void selectSwatch(int color) throws Throwable {
+        View option = findNamed(activity.getWindow().getDecorView(), MainActivity.COLOR_NAMES[color]);
+        assertNotNull(option);
+        runTestOnUiThread(() -> assertTrue(option.performClick()));
+        getInstrumentation().waitForIdleSync();
+        assertEquals(color, settings().getInt("accentColor", -1));
+    }
+
+    private void assertStableSwatches(boolean dark, int selected) throws Throwable {
+        int[] expected = {0xFFC83B46, dark ? 0xFFFF8500 : 0xFFE68A22, 0xFFE1BE19, 0xFF368449,
+                0xFF3675C3, 0xFFCE5B96, 0xFF965EB0, 0xFF926949};
+        runTestOnUiThread(() -> {
+            android.graphics.drawable.Drawable previousFill = null;
+            for (int color = 0; color < MainActivity.COLOR_NAMES.length; color++) {
+                ImageButton option = (ImageButton) findNamed(activity.getWindow().getDecorView(),
+                        MainActivity.COLOR_NAMES[color]);
+                assertNotNull(option);
+                assertEquals(color == selected, option.isSelected());
+                assertNull("Swatch artwork must not inherit an accent image tint", option.getImageTintList());
+                android.graphics.drawable.LayerDrawable icon =
+                        (android.graphics.drawable.LayerDrawable) option.getDrawable();
+                android.graphics.drawable.GradientDrawable fill =
+                        (android.graphics.drawable.GradientDrawable) icon.getDrawable(1);
+                assertNotSame("Swatches have independent fill drawables", previousFill, fill);
+                previousFill = fill;
+                for (int[] state : new int[][]{
+                        {}, {android.R.attr.state_selected}, {android.R.attr.state_pressed},
+                        {-android.R.attr.state_enabled}}) {
+                    assertEquals(MainActivity.COLOR_NAMES[color] + " fill is independent of accent and state",
+                            expected[color], fill.getColor().getColorForState(state, 0));
+                }
+                int size = Math.round(40 * activity.getResources().getDisplayMetrics().density);
+                Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+                Rect originalBounds = new Rect(icon.getBounds());
+                try {
+                    icon.setBounds(0, 0, size, size);
+                    icon.draw(new android.graphics.Canvas(bitmap));
+                    assertEquals(MainActivity.COLOR_NAMES[color] + " rendered center remains its own hue",
+                            expected[color], bitmap.getPixel(size / 2, size / 2));
+                } finally {
+                    icon.setBounds(originalBounds);
+                    bitmap.recycle();
+                }
+            }
+        });
+    }
+
     public void testColorChoicesPersistenceAndMigration() throws Exception {
         Game fixture = focused();
         fixture.setAutoNotes(true);

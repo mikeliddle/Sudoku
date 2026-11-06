@@ -28,7 +28,8 @@ independent of System/Light/Dark appearance. Existing Forest, Ocean, and Orchid
 preferences map to Green, Blue, and Purple without changing saved games or records.
 Dark Red and Brown use deeper, saturated button fills with light labels.
 Dark Orange uses vivid pumpkin-orange fills with dark labels. Each has coordinated
-readable accents for board entries, notes, and outlines.
+readable accents for board entries, notes, and outlines. Swatch fills keep their
+own hue regardless of the selected accent; only the selection outline changes.
 
 Select a digit in the bottom number bank to highlight matching entries and arm it.
 Matching visible notes get an accent-colored circle around that individual digit,
@@ -243,9 +244,12 @@ and 24 reproducibly seeded unique puzzles across both difficulty contracts.
 Device tests exercise the real native controls, digit switching/cancelling,
 outside taps, given-cell behavior, note editing, exhausted digits, mode switching,
 menu/resume timing, settings/colors, win flow, both layouts, rotation, recreation,
-and generation on hardware. Each test backs up and restores the current game
-and settings around its deterministic fixtures. Do not interact with the app
-while tests are running.
+and generation on hardware. Swatch checks cover every accent-selection transition
+in both appearances, including native drawable colors and rendered pixels.
+Each test normally restores the game and settings in teardown, but a process crash
+can prevent that cleanup. Take a durable backup first and prefer an isolated test
+installation; fixtures replace the installation's game and settings while running.
+Do not interact with the app while tests are running.
 Theme checks temporarily request system light/dark mode and restore the original
 setting. On devices that lock that system setting, tests explicitly report the
 limitation and validate configuration-specific board rendering and contrast instead;
