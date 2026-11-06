@@ -1,0 +1,85 @@
+plugins {
+    id 'com.android.application'
+}
+
+def signingPath = System.getenv('SUDOKU_SIGNING_DIR')
+def localAppData = System.getenv('LOCALAPPDATA')
+def signingDirectory = signingPath
+        ? new File(signingPath)
+        : localAppData
+                ? new File(new File(localAppData, 'QuietGrid'), 'Signing')
+                : new File(System.getProperty('user.home'), '.quietgrid-signing')
+def signingProperties = new Properties()
+def signingPropertiesFile = new File(signingDirectory, 'signing.properties')
+if (signingPropertiesFile.exists()) {
+    signingPropertiesFile.withInputStream { signingProperties.load(it) }
+}
+
+def legalAssets = tasks.register('prepareLegalAssets', Sync) {
+    from(rootProject.projectDir) {
+        include 'LICENSE', 'PRIVACY.md', 'THIRD_PARTY_NOTICES.md', 'licenses/APACHE-2.0.txt'
+    }
+    into layout.buildDirectory.dir('generated/legalAssets/legal')
+}
+
+def requireReleaseSigning = tasks.register('requireReleaseSigning') {
+    doLast {
+        if (!signingPropertiesFile.exists() ||
+                ['storeFile', 'storePassword', 'keyAlias', 'keyPassword'].any { !signingProperties.getProperty(it) } ||
+                !new File(signingDirectory, signingProperties.getProperty('storeFile')).isFile()) {
+            throw new GradleException('Private release signing is missing or incomplete. See README.md; an unsigned release will not be distributed.')
+        }
+    }
+}
+
+android {
+    namespace 'com.quietgrid.sudoku'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    useLibrary 'android.test.runner'
+    useLibrary 'android.test.base'
+
+    defaultConfig {
+        applicationId 'com.quietgrid.sudoku'
+        minSdk 29
+        targetSdk 36
+        versionCode 1
+        versionName '1.0'
+        testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+    }
+
+    signingConfigs {
+        release {
+            if (signingPropertiesFile.exists()) {
+                storeFile new File(signingDirectory, signingProperties.getProperty('storeFile'))
+                storePassword signingProperties.getProperty('storePassword')
+                keyAlias signingProperties.getProperty('keyAlias')
+                keyPassword signingProperties.getProperty('keyPassword')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            debuggable false
+            signingConfig signingConfigs.release
+        }
+    }
+    sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/legalAssets')
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    tasks.configureEach {
+        if (name == 'preReleaseBuild') {
+            dependsOn requireReleaseSigning
+        }
+        if ((name.startsWith('merge') && name.endsWith('Assets')) || name.toLowerCase().contains('lint')) {
+            dependsOn legalAssets
+        }
+    }
+    lint {
+        abortOnError true
+    }
+}

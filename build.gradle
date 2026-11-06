@@ -1,0 +1,21 @@
+plugins {
+    id 'com.android.application' version '8.13.0' apply false
+}
+
+tasks.register('compileEngineTests', JavaCompile) {
+    source = files(
+        'app/src/main/java/com/quietgrid/sudoku/Sudoku.java',
+        'app/src/main/java/com/quietgrid/sudoku/Game.java',
+        'app/src/test/java/com/quietgrid/sudoku/EngineTests.java'
+    )
+    classpath = files()
+    destinationDirectory = layout.buildDirectory.dir('engine-tests')
+    sourceCompatibility = '17'
+    targetCompatibility = '17'
+}
+
+tasks.register('engineTest', JavaExec) {
+    dependsOn 'compileEngineTests'
+    classpath = files(layout.buildDirectory.dir('engine-tests'))
+    mainClass = 'com.quietgrid.sudoku.EngineTests'
+}

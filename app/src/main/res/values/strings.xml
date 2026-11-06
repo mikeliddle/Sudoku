@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Sudoku</string>
+    <string name="game_status">%1$s  \u00b7  %2$d/81 filled</string>
+    <string name="save_error">Could not save this game. Check available device storage.</string>
+</resources>
