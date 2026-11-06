@@ -289,9 +289,14 @@ public final class MainActivity extends Activity {
             changed();
             announce(game.noteMode ? "Notes mode" : "Number entry mode");
         });
-        tools.addView(undoButton, weighted(48));
-        tools.addView(eraseButton, weighted(48));
-        tools.addView(notesButton, weighted(48));
+        for (View tool : new View[]{undoButton, eraseButton, notesButton}) {
+            tool.setPadding(dp(16), dp(16), dp(16), dp(16));
+        }
+        tools.addView(undoButton, weighted(56));
+        tools.addView(eraseButton, weighted(56));
+        LinearLayout.LayoutParams notesLayout = weighted(56);
+        notesLayout.weight = 1.4f;
+        tools.addView(notesButton, notesLayout);
         controls.addView(tools);
         if (landscape) {
             ScrollView scroll = new ScrollView(this);

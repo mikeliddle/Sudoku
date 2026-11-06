@@ -79,6 +79,9 @@ without blocking input. This feedback is skipped when Android disables animation
 
 The bottom controls contain only accessible Undo/Erase icon buttons, Notes, and the nine digits with
 their remaining counts; instructional and input-status text is omitted.
+Undo, Erase, and Notes have consistent 16dp internal padding and 56dp-high touch
+targets, with extra width for the Notes label. Erase uses a trash-can icon but
+still clears only the selected editable cell; it never deletes the game.
 Difficulty and elapsed time share a centered header, without a filled-cell count.
 Custom buttons consistently use flat rounded surfaces with native ripple feedback;
 accent outlines separate secondary actions from the surrounding canvas, with

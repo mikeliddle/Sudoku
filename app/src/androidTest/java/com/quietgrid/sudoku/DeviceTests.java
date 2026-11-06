@@ -547,6 +547,64 @@ public final class DeviceTests extends InstrumentationTestCase {
         getInstrumentation().waitForIdleSync();
     }
 
+    public void testPaddedEraseControls() throws Throwable {
+        for (int appearance : new int[]{1, 2}) {
+            Game fixture = focused();
+            assertTrue(settings().edit().putInt("appearance", appearance).commit());
+            write(fixture); launch(); clickPrefix("Resume ");
+            for (int orientation : new int[]{ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE}) {
+                rotate(orientation);
+                float density = activity.getResources().getDisplayMetrics().density;
+                Rect screen = new Rect();
+                activity.getWindow().getDecorView().getWindowVisibleDisplayFrame(screen);
+                for (View control : new View[]{
+                        findNamed(activity.getWindow().getDecorView(), "Undo"),
+                        findNamed(activity.getWindow().getDecorView(), "Erase"),
+                        findPrefix(activity.getWindow().getDecorView(), "Notes: ")}) {
+                    assertNotNull(control);
+                    int padding = Math.round(16 * density);
+                    assertEquals(padding, control.getPaddingLeft());
+                    assertEquals(padding, control.getPaddingRight());
+                    assertEquals(padding, control.getPaddingTop());
+                    assertEquals(padding, control.getPaddingBottom());
+                    assertTrue(control.getWidth() >= Math.round(48 * density));
+                    assertEquals(Math.round(56 * density), control.getHeight());
+                    Rect bounds = new Rect();
+                    assertTrue(control.getGlobalVisibleRect(bounds));
+                    assertTrue("Padded control fits on screen", screen.contains(bounds));
+                    assertEquals("Control is not clipped", control.getHeight(), bounds.height());
+                }
+                TextView notes = (TextView) findPrefix(activity.getWindow().getDecorView(), "Notes: ");
+                assertTrue("Notes label fits inside its padding",
+                        notes.getPaint().measureText(notes.getText().toString())
+                                <= notes.getWidth() - notes.getPaddingLeft() - notes.getPaddingRight());
+                ImageButton erase = (ImageButton) findNamed(activity.getWindow().getDecorView(), "Erase");
+                assertEquals("Erase", erase.getTooltipText().toString());
+                assertFalse("Erase disabled with no selected cell", erase.isEnabled());
+                int cell = firstEmpty(saved());
+                selectCell(board(), cell);
+                clickNumber(fixture.solution[cell]);
+                Game entered = saved();
+                selectCell(board(), cell);
+                assertTrue(erase.isEnabled());
+                clickText("Erase");
+                Game cleared = saved();
+                assertEquals(0, cleared.values[cell]);
+                for (int other = 0; other < 81; other++) {
+                    if (other != cell) assertEquals(entered.values[other], cleared.values[other]);
+                }
+                assertTrue(Arrays.equals(entered.clues, cleared.clues));
+                clickText("Undo");
+                assertTrue(Arrays.equals(entered.values, saved().values));
+                clickText("Sudoku");
+                capture("sudoku-padded-controls-" + appearance + "-"
+                        + (orientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ? "landscape" : "portrait") + ".png");
+            }
+            finishActivity();
+        }
+    }
+
     public void testDuplicateFeedbackAndQuietControls() throws Throwable {
         for (boolean mistakes : new boolean[]{false, true}) {
             int[] solution = new int[81];
