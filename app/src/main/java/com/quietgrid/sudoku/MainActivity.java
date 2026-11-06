@@ -4,6 +4,7 @@ import android.animation.ValueAnimator;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -37,6 +38,9 @@ import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.Locale;
@@ -68,6 +72,11 @@ public final class MainActivity extends Activity {
     private int generationSerial;
     private Sudoku.Difficulty requestedDifficulty;
     private SharedPreferences preferences;
+    private PuzzleLibrary library;
+    private boolean transferBusy, libraryOpening;
+    private Future<?> documentTransfer;
+    private int transferSerial;
+    private static final int EXPORT_PUZZLES = 41, IMPORT_PUZZLES = 42;
 
     static final class Palette {
         final int background, surface, ink, muted, accent, primary, onPrimary, tint, peer, line, error, errorFill;
@@ -131,8 +140,12 @@ public final class MainActivity extends Activity {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                     android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::navigateBack);
         }
-        if (state != null && state.containsKey("generating")) {
-            generate(Sudoku.Difficulty.valueOf(state.getString("generating")));
+        Sudoku.Difficulty restart = state != null && state.containsKey("generating")
+                ? Sudoku.Difficulty.valueOf(state.getString("generating")) : null;
+        loadLibrary(restart);
+        if (state != null && state.getBoolean("transferBusy")) {
+            puzzleError("Puzzle transfer interrupted",
+                    "Please select the document again to retry. An interrupted export may leave an incomplete document; discard it before retrying.");
         }
         if (restoreError != null) {
             new AlertDialog.Builder(this).setTitle("Saved game could not be opened")
@@ -229,6 +242,7 @@ public final class MainActivity extends Activity {
             start.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
             start.setPadding(dp(16), 0, dp(16), 0);
             start.setOnClickListener(v -> requestNewGame(difficulty));
+            start.setEnabled(library != null);
             addControl(content, start, 56, 12);
         }
         if (saveFailed) addCopy(content, getString(R.string.save_error), 14, palette.error, 0);
@@ -367,6 +381,7 @@ public final class MainActivity extends Activity {
         save();
         if (screen == Screen.PLAY && game.won()) {
             recordBestSolve();
+            recordCompletion();
             screen = Screen.WIN;
             render(true);
         } else if (screen == Screen.PLAY) refreshGame();
@@ -426,6 +441,21 @@ public final class MainActivity extends Activity {
         heading.addView(done, new LinearLayout.LayoutParams(dp(48), dp(48)));
         content.addView(heading);
 
+        addCopy(content, "Puzzle collection", 22, palette.ink, 8);
+        Button export = button("Export puzzle records", false);
+        export.setEnabled(library != null && !transferBusy);
+        export.setOnClickListener(v -> pickPuzzleDocument(true));
+        addControl(content, export, 56, 8);
+        Button importPuzzles = button("Import curated collection", false);
+        importPuzzles.setEnabled(library != null && !transferBusy);
+        importPuzzles.setOnClickListener(v -> pickPuzzleDocument(false));
+        addControl(content, importPuzzles, 56, 16);
+        if (library == null) {
+            Button retry = button("Retry opening puzzle records", false);
+            retry.setEnabled(!libraryOpening);
+            retry.setOnClickListener(v -> loadLibrary(null));
+            addControl(content, retry, 56, 16);
+        }
         addCopy(content, "Appearance", 22, palette.ink, 8);
         RadioGroup appearance = new RadioGroup(this);
         appearance.setOrientation(RadioGroup.HORIZONTAL);
@@ -581,6 +611,12 @@ public final class MainActivity extends Activity {
         TextView details = text(game.difficulty.label + "  \u00b7  " + time(game.elapsedMillis), 24, palette.accent);
         details.setGravity(Gravity.CENTER);
         result.addView(details, new LinearLayout.LayoutParams(-1, dp(64)));
+        PuzzleLibrary.Vote vote = library == null ? null : library.vote(game);
+        Button classify = button(vote == null || vote.classification == null
+                ? "Classify puzzle" : "Classification: " + vote.classification.label, false);
+        classify.setEnabled(library != null);
+        classify.setOnClickListener(v -> chooseClassification());
+        addControl(result, classify, 56, 12);
         Button next = button("Done", true);
         next.setOnClickListener(v -> navigate(Screen.MENU));
         addControl(result, next, 56, 0);
@@ -606,6 +642,7 @@ public final class MainActivity extends Activity {
     }
 
     private void navigate(Screen destination) {
+        if (transferBusy) return;
         updateElapsed();
         if (game != null && destination != Screen.PLAY && destination != Screen.WIN) game.armedDigit = 0;
         save();
@@ -615,6 +652,7 @@ public final class MainActivity extends Activity {
     }
 
     private void navigateBack() {
+        if (transferBusy) return;
         if (screen == Screen.SETTINGS) navigate(settingsReturn);
         else if (screen == Screen.PLAY || screen == Screen.WIN) navigate(Screen.MENU);
         else finish();
@@ -625,6 +663,9 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() { navigateBack(); }
 
     private void generate(Sudoku.Difficulty difficulty) {
+        if (library == null || transferBusy) return;
+        if (!recordCompletion()) return;
+        PuzzleLibrary available = new PuzzleLibrary(library);
         updateElapsed();
         loading = true;
         requestedDifficulty = difficulty;
@@ -633,7 +674,7 @@ public final class MainActivity extends Activity {
         content.setOrientation(LinearLayout.VERTICAL);
         content.setPadding(dp(24), dp(12), dp(24), dp(12));
         content.addView(new ProgressBar(this), new LinearLayout.LayoutParams(-1, dp(48)));
-        TextView explanation = text("Generating a unique puzzle and checking its logical difficulty. Hard puzzles can take a little longer.", 15, palette.ink);
+        TextView explanation = text("Checking the collection, or generating a unique puzzle with certified logical difficulty.", 15, palette.ink);
         explanation.setPadding(0, dp(16), 0, dp(8));
         content.addView(explanation);
         progressDialog = new AlertDialog.Builder(this).setTitle("Creating " + difficulty.label.toLowerCase(Locale.ROOT))
@@ -645,7 +686,7 @@ public final class MainActivity extends Activity {
         progressDialog.show();
         generation = worker.submit(() -> {
             try {
-                Sudoku.Puzzle puzzle = Sudoku.generate(difficulty, new SecureRandom());
+                Sudoku.Puzzle puzzle = available.nextPuzzle(difficulty, new SecureRandom());
                 handler.post(() -> {
                     if (isDestroyed() || !loading || request != generationSerial) return;
                     progressDialog.dismiss();
@@ -673,6 +714,170 @@ public final class MainActivity extends Activity {
     }
 
     private AtomicFile savedGame() { return new AtomicFile(new File(getFilesDir(), "current-game.bin")); }
+
+    private AtomicFile savedLibrary() { return new AtomicFile(new File(getFilesDir(), "puzzle-library.bin")); }
+
+    private void loadLibrary(Sudoku.Difficulty restart) {
+        if (libraryOpening) return;
+        libraryOpening = true;
+        worker.submit(() -> {
+            try {
+                AtomicFile file = savedLibrary();
+                PuzzleLibrary restored;
+                if (!file.getBaseFile().exists() && !new File(file.getBaseFile() + ".bak").exists()) {
+                    restored = new PuzzleLibrary();
+                } else {
+                    try (DataInputStream in = new DataInputStream(file.openRead())) { restored = PuzzleLibrary.read(in); }
+                }
+                handler.post(() -> {
+                    if (isDestroyed()) return;
+                    libraryOpening = false;
+                    library = restored;
+                    recordCompletion();
+                    render(false);
+                    if (restart != null) generate(restart);
+                });
+            } catch (IOException ex) {
+                Log.e("Sudoku", "Could not open puzzle library", ex);
+                handler.post(() -> {
+                    if (isDestroyed()) return;
+                    libraryOpening = false;
+                    render(false);
+                    puzzleError("Puzzle records could not be opened",
+                            ex.getMessage() + "\nYour records have not been replaced. Check device storage and retry in Settings.");
+                });
+            } catch (CancellationException ex) {
+                Log.i("Sudoku", "Opening puzzle library cancelled");
+            }
+        });
+    }
+
+    private boolean persistLibrary(PuzzleLibrary updated) {
+        AtomicFile file = savedLibrary();
+        FileOutputStream stream = null;
+        try {
+            stream = file.startWrite();
+            DataOutputStream out = new DataOutputStream(stream);
+            updated.write(out); out.flush(); file.finishWrite(stream);
+            library = updated;
+            return true;
+        } catch (IOException ex) {
+            file.failWrite(stream);
+            Log.e("Sudoku", "Could not save puzzle library", ex);
+            puzzleError("Puzzle records could not be saved",
+                    "Check available device storage and retry. Existing records have not been replaced.");
+            return false;
+        }
+    }
+
+    private boolean recordCompletion() {
+        if (game == null || !game.won()) return true;
+        if (library == null) return false;
+        PuzzleLibrary updated = new PuzzleLibrary(library);
+        return !updated.recordCompletion(game) || persistLibrary(updated);
+    }
+
+    private void chooseClassification() {
+        String[] labels = {"Easy", "Medium", "Hard"};
+        PuzzleLibrary.Vote vote = library.vote(game);
+        int selected = vote == null || vote.classification == null ? -1 : vote.classification.ordinal();
+        new AlertDialog.Builder(this).setTitle("How did this puzzle feel?")
+                .setSingleChoiceItems(labels, selected, (dialog, which) -> {
+                    PuzzleLibrary updated = new PuzzleLibrary(library);
+                    updated.classify(game, Sudoku.Difficulty.values()[which]);
+                    if (persistLibrary(updated)) { dialog.dismiss(); render(false); }
+                }).setNegativeButton("Cancel", null).show();
+    }
+
+    @SuppressWarnings("deprecation")
+    private void pickPuzzleDocument(boolean export) {
+        Intent intent = new Intent(export ? Intent.ACTION_CREATE_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType(export ? "application/json" : "*/*");
+        if (export) intent.putExtra(Intent.EXTRA_TITLE, "sudoku-puzzles.json");
+        try { startActivityForResult(intent, export ? EXPORT_PUZZLES : IMPORT_PUZZLES); }
+        catch (android.content.ActivityNotFoundException ex) {
+            Log.e("Sudoku", "No document provider available", ex);
+            puzzleError("Documents unavailable", "Enable an Android document provider to import or export puzzle files.");
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if ((request != EXPORT_PUZZLES && request != IMPORT_PUZZLES) || result != RESULT_OK) return;
+        if (data == null || data.getData() == null) {
+            puzzleError("Puzzle transfer failed", "The document provider did not return a document. Please try again.");
+            return;
+        }
+        if (library == null || transferBusy) {
+            puzzleError("Puzzle records unavailable", "Please retry after the puzzle records have opened.");
+            return;
+        }
+        android.net.Uri uri = data.getData();
+        PuzzleLibrary snapshot = new PuzzleLibrary(library);
+        transferBusy = true;
+        int transfer = ++transferSerial;
+        AlertDialog.Builder progressBuilder = new AlertDialog.Builder(this).setTitle(request == IMPORT_PUZZLES
+                ? "Checking collection" : "Exporting puzzles")
+                .setView(new ProgressBar(this)).setCancelable(false);
+        if (request == IMPORT_PUZZLES) {
+            progressBuilder.setNegativeButton("Cancel", (dialog, which) -> {
+                transferSerial++;
+                if (documentTransfer != null) documentTransfer.cancel(true);
+                transferBusy = false;
+                render(false);
+            });
+        }
+        AlertDialog progress = progressBuilder.create();
+        progressDialog = progress;
+        progress.show();
+        documentTransfer = worker.submit(() -> {
+            try {
+                PuzzleLibrary.ImportResult imported = null;
+                if (request == EXPORT_PUZZLES) {
+                    byte[] bytes = snapshot.exportJson().getBytes(StandardCharsets.UTF_8);
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                        if (out == null) throw new IOException("The selected document could not be opened for writing.");
+                        out.write(bytes);
+                    }
+                } else {
+                    try (InputStream in = getContentResolver().openInputStream(uri)) {
+                        if (in == null) throw new IOException("The selected document could not be opened for reading.");
+                        imported = snapshot.importCollection(PuzzleJson.readDocument(in));
+                    }
+                }
+                PuzzleLibrary.ImportResult checked = imported;
+                handler.post(() -> {
+                    if (isDestroyed() || transfer != transferSerial) return;
+                    transferBusy = false; progress.dismiss();
+                    if (checked != null) {
+                        if (!persistLibrary(checked.library)) return;
+                        render(false);
+                        puzzleError("Collection imported", checked.added + " new puzzles; " + checked.duplicates
+                                + " identical duplicates skipped; " + checked.ignoredVotes
+                                + " vote records not imported.\nCompleted puzzle history and your current game are unchanged.");
+                    } else puzzleError("Puzzle records exported", "Saved the collection and local completion/classification records to your chosen document.");
+                });
+            } catch (IOException | IllegalArgumentException | SecurityException ex) {
+                Log.e("Sudoku", "Puzzle document transfer failed", ex);
+                handler.post(() -> {
+                    if (isDestroyed() || transfer != transferSerial) return;
+                    transferBusy = false; progress.dismiss();
+                    puzzleError("Puzzle transfer failed", ex.getMessage()
+                            + "\nNo local records or current game were changed."
+                            + (request == EXPORT_PUZZLES ? "\nThe destination may be incomplete; discard it and export again."
+                            : "\nCheck the document and retry."));
+                });
+            } catch (CancellationException ex) {
+                Log.i("Sudoku", "Puzzle transfer cancelled");
+            }
+        });
+    }
+
+    private void puzzleError(String title, String message) {
+        new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK", null).show();
+    }
 
     private void save() {
         if (game == null) return;
@@ -750,11 +955,13 @@ public final class MainActivity extends Activity {
         updateElapsed(); save();
         out.putString("screen", screen.name());
         out.putString("settingsReturn", settingsReturn.name());
+        out.putBoolean("transferBusy", transferBusy);
         if (loading && requestedDifficulty != null) out.putString("generating", requestedDifficulty.name());
     }
 
     @Override protected void onDestroy() {
         if (generation != null) generation.cancel(true);
+        if (documentTransfer != null) documentTransfer.cancel(true);
         worker.shutdownNow();
         if (progressDialog != null) progressDialog.dismiss();
         if (celebration != null) celebration.stop();

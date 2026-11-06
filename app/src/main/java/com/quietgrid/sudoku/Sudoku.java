@@ -1,6 +1,7 @@
 package com.quietgrid.sudoku;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
@@ -56,7 +57,14 @@ public final class Sudoku {
     }
 
     private static int search(int[] v, int limit, Random random) {
+        return search(v, limit, random, null);
+    }
+
+    private static int search(int[] v, int limit, Random random, int[] budget) {
         if (Thread.currentThread().isInterrupted()) throw new CancellationException();
+        if (budget != null && --budget[0] < 0) {
+            throw new IllegalArgumentException("Puzzle validation exceeded the search limit.");
+        }
         int best = -1, mask = 0, size = 10;
         for (int i = 0; i < 81; i++) {
             if (v[i] != 0) continue;
@@ -74,7 +82,7 @@ public final class Sudoku {
         if (random != null) Collections.shuffle(digits, random);
         for (int d : digits) {
             v[best] = d;
-            found += search(v, limit - found, random);
+            found += search(v, limit - found, random, budget);
             if (found >= limit) {
                 if (random == null) v[best] = 0;
                 return found;
@@ -86,12 +94,25 @@ public final class Sudoku {
 
     public enum Difficulty {
         FOCUSED("Easy"),
+        MEDIUM("Medium"),
         HARD("Hard");
 
         public final String label;
         Difficulty(String label) {
             this.label = label;
         }
+    }
+
+    public static int[] uniqueSolution(int[] clues) {
+        if (!valid(clues) || Arrays.stream(clues).noneMatch(value -> value == 0)) {
+            throw new IllegalArgumentException("A puzzle must have valid givens and at least one empty cell.");
+        }
+        if (search(clues.clone(), 2, null, new int[]{200000}) != 1) {
+            throw new IllegalArgumentException("Each puzzle must have exactly one solution.");
+        }
+        int[] solution = clues.clone();
+        search(solution, 1, new Random(0), new int[]{200000});
+        return solution;
     }
 
     public static final class Rating {
@@ -122,7 +143,8 @@ public final class Sudoku {
             for (int i = 0; i < 81; i++) order.add(i);
             Collections.shuffle(order, random);
             int remaining = 81;
-            int targetClues = difficulty == Difficulty.FOCUSED ? 36 + random.nextInt(5) : 34;
+            int targetClues = difficulty == Difficulty.FOCUSED ? 36 + random.nextInt(5)
+                    : difficulty == Difficulty.MEDIUM ? 35 : 34;
             for (int cell : order) {
                 int old = clues[cell];
                 clues[cell] = 0;
@@ -139,6 +161,10 @@ public final class Sudoku {
                         return new Puzzle(clues, solution, difficulty, singles);
                     }
                     if (remaining == 36) break;
+                } else if (difficulty == Difficulty.MEDIUM) {
+                    if (singles.solved && singles.hiddenSingles >= 3) {
+                        return new Puzzle(clues, solution, difficulty, singles);
+                    }
                 } else if (!singles.solved) {
                     Rating advanced = rate(clues, true);
                     if (advanced.solved && advanced.deductions >= 6 && advanced.eliminations >= 12) {
