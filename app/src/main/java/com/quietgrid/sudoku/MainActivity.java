@@ -508,7 +508,8 @@ public final class MainActivity extends Activity {
             }
             addControl(content, colors, 56, 8);
         }
-        addCopy(content, "Your appearance and color choices apply to all games.", 14, palette.muted, 0);
+        addCopy(content, "Your appearance and color choices apply to all games.", 14, palette.muted, 16);
+        addCopy(content, getString(R.string.ai_disclosure), 14, palette.muted, 0);
     }
 
     private void persistPreference(String key, boolean value) {
