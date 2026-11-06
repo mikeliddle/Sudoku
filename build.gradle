@@ -6,7 +6,10 @@ tasks.register('compileEngineTests', JavaCompile) {
     source = files(
         'app/src/main/java/com/quietgrid/sudoku/Sudoku.java',
         'app/src/main/java/com/quietgrid/sudoku/Game.java',
-        'app/src/test/java/com/quietgrid/sudoku/EngineTests.java'
+        'app/src/main/java/com/quietgrid/sudoku/PuzzleLibrary.java',
+        'app/src/main/java/com/quietgrid/sudoku/PuzzleJson.java',
+        'app/src/test/java/com/quietgrid/sudoku/EngineTests.java',
+        'app/src/test/java/com/quietgrid/sudoku/CurationTests.java'
     )
     classpath = files()
     destinationDirectory = layout.buildDirectory.dir('engine-tests')

@@ -32,12 +32,18 @@ public final class DeviceTests extends InstrumentationTestCase {
     private Activity activity;
     private byte[] originalSave;
     private Map<String, ?> originalSettings;
+    private final Map<String, byte[]> originalLibraryFiles = new java.util.LinkedHashMap<>();
 
     @Override protected void setUp() throws Exception {
         super.setUp();
         File file = saveFile();
         originalSave = file.exists() ? Files.readAllBytes(file.toPath()) : null;
         originalSettings = settings().getAll();
+        for (String name : new String[]{"puzzle-library.bin", "puzzle-library.bin.bak", "puzzle-library.bin.new"}) {
+            File library = new File(getInstrumentation().getTargetContext().getFilesDir(), name);
+            originalLibraryFiles.put(name, library.exists() ? Files.readAllBytes(library.toPath()) : null);
+            if (library.exists()) assertTrue(library.delete());
+        }
         assertTrue(settings().edit().clear().commit());
     }
 
@@ -49,6 +55,11 @@ public final class DeviceTests extends InstrumentationTestCase {
             }
             if (originalSave != null) Files.write(saveFile().toPath(), originalSave);
             else if (saveFile().exists()) assertTrue(saveFile().delete());
+            for (Map.Entry<String, byte[]> entry : originalLibraryFiles.entrySet()) {
+                File library = new File(getInstrumentation().getTargetContext().getFilesDir(), entry.getKey());
+                if (entry.getValue() != null) Files.write(library.toPath(), entry.getValue());
+                else if (library.exists()) assertTrue(library.delete());
+            }
             SharedPreferences.Editor editor = settings().edit().clear();
             for (Map.Entry<String, ?> entry : originalSettings.entrySet()) {
                 if (entry.getValue() instanceof Boolean) editor.putBoolean(entry.getKey(), (Boolean) entry.getValue());
@@ -260,6 +271,65 @@ public final class DeviceTests extends InstrumentationTestCase {
         Sudoku.Rating rating = Sudoku.rate(puzzle.clues, true);
         assertTrue(rating.solved);
         assertTrue(rating.deductions >= 6 && rating.eliminations >= 12);
+    }
+
+    public void testClassificationCuratedConsumptionAndMediumPreferences() throws Throwable {
+        Game almost = focused();
+        Sudoku.Puzzle second = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(53002));
+        String firstRow = "{\"id\":\"" + PuzzleLibrary.id(almost.clues) + "\",\"givens\":\""
+                + PuzzleLibrary.givens(almost.clues) + "\",\"difficulty\":\"Easy\"}";
+        String secondRow = "{\"id\":\"" + PuzzleLibrary.id(second.clues) + "\",\"givens\":\""
+                + PuzzleLibrary.givens(second.clues) + "\",\"difficulty\":\"Easy\"}";
+        PuzzleLibrary curated = new PuzzleLibrary().importCollection(
+                "{\"format\":\"quietgrid-sudoku\",\"version\":1,\"puzzles\":[" + firstRow + "," + secondRow + "],\"votes\":[]}").library;
+        File libraryFile = new File(getInstrumentation().getTargetContext().getFilesDir(), "puzzle-library.bin");
+        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(libraryFile))) { curated.write(out); }
+        System.arraycopy(almost.solution, 0, almost.values, 0, 81);
+        int finalCell = firstEmpty(almost);
+        almost.values[finalCell] = 0;
+        almost.elapsedMillis = 183000;
+        write(almost); launch();
+        assertNotNull(findText("Medium"));
+        clickPrefix("Resume ");
+        clickNumber(almost.solution[finalCell]); selectCell(board(), finalCell);
+        SystemClock.sleep(1900);
+        clickText("Classify puzzle");
+        AccessibilityNodeInfo dialogRoot = getInstrumentation().getUiAutomation().getRootInActiveWindow();
+        boolean selected = false;
+        for (AccessibilityNodeInfo node : dialogRoot.findAccessibilityNodeInfosByText("Hard")) {
+            if (node.getText() != null && "Hard".contentEquals(node.getText())) {
+                selected |= node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+        }
+        assertTrue("Classification uses native dialog choices", selected);
+        getInstrumentation().waitForIdleSync();
+        assertNotNull(findText("Classification: Hard"));
+        Game completed = saved();
+        try (DataInputStream in = new DataInputStream(new FileInputStream(libraryFile))) {
+            PuzzleLibrary records = PuzzleLibrary.read(in);
+            assertEquals(Sudoku.Difficulty.HARD, records.vote(completed).classification);
+            assertEquals(Sudoku.Difficulty.FOCUSED, records.vote(completed).offeredDifficulty);
+            assertTrue(Arrays.equals(second.clues, records.nextCurated(Sudoku.Difficulty.FOCUSED).clues));
+        }
+        assertEquals(completed.elapsedMillis, settings().getLong("bestTime.FOCUSED", -1));
+        assertEquals(-1L, settings().getLong("bestTime.HARD", -1));
+        capture("sudoku-classification.png");
+        clickText("Done"); finishActivity(); launch();
+        clickText("Settings");
+        assertNotNull(findText("Export puzzle records"));
+        assertNotNull(findText("Import curated collection"));
+        clickText("Auto notes: Medium");
+        assertTrue(settings().getBoolean("autoNotes.MEDIUM", false));
+        assertFalse(settings().getBoolean("autoNotes.FOCUSED", true));
+        assertFalse(settings().getBoolean("autoNotes.HARD", true));
+        clickText("Close settings");
+        clickPrefix("Easy"); waitForGame();
+        assertTrue("Completed first puzzle stays consumed after restart", Arrays.equals(second.clues, saved().clues));
+        finishActivity(); launch(); clickPrefix("Resume ");
+        assertTrue("Resumed second curated puzzle is not consumed", Arrays.equals(second.clues, saved().clues));
+        try (DataInputStream in = new DataInputStream(new FileInputStream(libraryFile))) {
+            assertEquals(1, PuzzleLibrary.read(in).completedCount());
+        }
     }
 
     public void testPersonalBestTimes() throws Throwable {
@@ -1165,6 +1235,13 @@ public final class DeviceTests extends InstrumentationTestCase {
         activity = getInstrumentation().startActivitySync(new Intent(getInstrumentation().getTargetContext(), MainActivity.class)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK));
         getInstrumentation().waitForIdleSync();
+        for (int i = 0; i < 100; i++) {
+            View easy = findPrefix(activity.getWindow().getDecorView(), "Easy");
+            if (easy != null && easy.isEnabled()) return;
+            SystemClock.sleep(50);
+            getInstrumentation().waitForIdleSync();
+        }
+        fail("Local puzzle records did not open within five seconds");
     }
 
     private void finishActivity() {

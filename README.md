@@ -1,8 +1,8 @@
 # Sudoku for Android
 
 A standalone, offline native Android app. Open this project in Android Studio.
-There is no in-app account, advertising, analytics, network permission,
-or finite puzzle pack.
+There is no in-app account, advertising, analytics, or network permission.
+Optional offline curated collections supplement an unlimited generated supply.
 
 ## Download
 
@@ -62,7 +62,7 @@ without blocking input. This feedback is skipped when Android disables animation
 - **Auto notes** resets all annotations to legal candidates when turned on.
   To reset manual changes, switch it off and on again. Switching it off keeps
   the current notes, so you can continue working manually.
-  Its preference is saved separately for Easy and Hard; both are available in
+  Its preference is saved separately for Easy, Medium and Hard; all are available in
   Settings. Existing saved games seed their own difficulty's preference without
   resetting manual notes; other difficulties inherit the previous global default.
 - Peer constraints always hide impossible notes without deleting your decisions.
@@ -98,6 +98,7 @@ solver that performs no search or guessing:
 | Mode | Acceptance contract |
 |---|---|
 | Easy | 36–40 starting clues and at least three immediately available naked singles; solvable entirely with singles, requiring at most two hidden-single placements in the naked-single-first solver. A gentler no-notes game, without advanced deductions. |
+| Medium | Solvable entirely with singles, but requiring at least three hidden-single placements in the same naked-single-first solver. More sustained candidate scanning than Easy, without Hard's advanced eliminations. This is a measured technique criterion, not just a clue-count band. |
 | Hard | Not solvable by singles alone; solvable using singles plus locked candidates, naked pairs/triples, hidden pairs, and/or X-wings. The solver must make at least six candidate-deduction steps removing at least twelve candidates. |
 
 These are operational technique ratings, not a claim that every person or every
@@ -117,9 +118,12 @@ Uninstalling or clearing app storage removes it.
 
 Time runs only during play, pausing in the menu, settings, and background.
 A solved board celebrates with animated digits and confetti, followed by elapsed
-time, difficulty, and **Done**, which returns to the main menu. The system's
+time, offered difficulty, optional **Classify puzzle**, and **Done**, which returns to the main menu.
+Classification records how the puzzle felt: Easy, Medium or Hard. It never
+changes the game's offered difficulty, timer or personal-best category.
+The system's
 reduced-motion preference skips the animation. Resume is only offered for unfinished
-games; the menu offers simply **Easy** and **Hard**, without difficulty explanations,
+games; the menu offers simply **Easy**, **Medium** and **Hard**, without difficulty explanations,
 help or past-result entries, alongside Settings.
 Each difficulty shows its personal-best completed solve time when one exists.
 Only a correctly completed puzzle can set a record, using active play time;
@@ -128,7 +132,10 @@ An existing completed saved game can seed its difficulty's record.
 Settings uses a borderless gear icon; gameplay returns to the menu with a
 borderless three-line icon. Both retain accessible labels and touch feedback.
 Settings closes with a borderless X icon; per-difficulty switches are labeled
-**Auto notes: Easy** and **Auto notes: Hard**.
+**Auto notes: Easy**, **Auto notes: Medium** and **Auto notes: Hard**.
+Legacy `FOCUSED` (Easy) and `HARD` save/preference identifiers remain unchanged.
+Medium uses `MEDIUM` and inherits the old global auto-notes default on first use;
+existing per-difficulty preferences, game state and best times are preserved.
 
 Settings offers a saved **System / Light / Dark** appearance choice, independently
 of the accent color. System is the default and follows device changes; explicit
@@ -140,6 +147,114 @@ layouts account for system bars and cutouts. The board exposes 81 individually
 described accessibility nodes, including row, column, value, fixed-clue status,
 visible notes, and optional mistake status. A physical keyboard can navigate with
 arrows and enter digits; it is not required.
+
+## Offline classification and curation
+
+Complete a puzzle correctly, then choose **Classify puzzle** on the win screen.
+The choice is saved immediately and can be changed on that screen before **Done**.
+Skipping classification still records completion. There is one local record per
+exact set of givens, not a cross-user vote total. Records contain only the puzzle,
+the difficulty first offered to this player, and their optional classification:
+no device identity, account, solve time or gameplay annotations.
+
+For each difficulty, new games use the first unseen curated puzzle in collection
+order. Only valid completion consumes it; selection, abandonment and Resume do not.
+After that tier's collection is exhausted, the same locally certified generator
+supplies new games. Completion identities persist independently of the collection,
+across restart and re-import, including puzzles previously completed as generated
+games. New unseen imports become eligible immediately. A completed legacy current
+save seeds this history; earlier completions cannot be reconstructed from best times.
+
+### Export → curate on PC → import
+
+1. Open **Settings → Export puzzle records**. Choose a local folder in Android's
+   document picker. Copy `sudoku-puzzles.json` to your PC using USB file transfer
+   or another transfer method you choose. Export never replaces the unfinished game.
+2. In the JSON file, select records from `votes`. Copy each chosen record's `id`
+   and `givens` into `puzzles`, with the curator's chosen `difficulty`. Usually this
+   comes from `classification`, but the curator decides. Keep `votes` empty in the
+   distribution file. Merge submissions by `id`, resolving disagreements yourself:
+   identical puzzles should appear once, assigned to one difficulty.
+3. Copy the curated JSON back to the device. Choose
+   **Settings → Import curated collection**, then select it. The app checks every
+   record off the UI thread, validates unique solvability, and atomically adds the
+   entire collection or rejects it without changing existing records or the current
+   game. Import reports additions, identical duplicates and ignored vote records.
+
+This PowerShell example selects all classified local records; edit the resulting
+`puzzles` list to select a smaller collection or change curator classifications:
+
+```powershell
+$records = Get-Content -Raw .\sudoku-puzzles.json | ConvertFrom-Json
+$selected = @($records.votes | Where-Object { $null -ne $_.classification } |
+    ForEach-Object {
+        [ordered]@{ id = $_.id; givens = $_.givens; difficulty = $_.classification }
+    })
+[ordered]@{
+    format = 'quietgrid-sudoku'
+    version = 1
+    puzzles = $selected
+    votes = @()
+} | ConvertTo-Json -Depth 6 | Set-Content -Encoding utf8 .\curated.json
+```
+
+Imports are additive, not collection replacement. Identical rows are deduplicated.
+Conflicting difficulties for an existing ID or within a file reject the whole
+import; this version does not remove or reclassify already imported catalog entries.
+Resolve conflicts against your existing catalog before importing.
+Vote records in a file are validated but **never** imported as local votes or
+completion history. Merely importing someone else's completion must not consume
+their puzzles for you.
+
+### Version 1 interchange contract
+
+Use UTF-8 JSON (an initial BOM is accepted). All four top-level fields are required,
+and unknown fields are rejected. A complete valid collection example:
+
+```json
+{
+  "format": "quietgrid-sudoku",
+  "version": 1,
+  "puzzles": [
+    {
+      "id": "19b928a88dcad4ac3117b40c27e2fc5cab100e991ff23d7dcd70f84c68baaaa5",
+      "givens": "530070000600195000098000060800060003400803001700020006060000280000419005000080079",
+      "difficulty": "Easy"
+    }
+  ],
+  "votes": []
+}
+```
+
+`givens` is exactly 81 ASCII digits, row-major, with `0` for an empty square.
+`id` is lowercase SHA-256 of those exact 81 ASCII bytes, with no newline or prefix.
+Do not hash the solution, player entries, JSON text or a transformed equivalent
+puzzle. Preserve exported IDs when curation does not change the givens.
+`difficulty` must be exactly `Easy`, `Medium` or `Hard`.
+
+A vote has exactly `id`, `givens`, `offeredDifficulty` (the same three labels) and
+`classification` (one label or JSON `null`). A catalog entry has exactly `id`,
+`givens` and `difficulty`. Human classification and catalog assignment are **not**
+algorithmic certification: a unique puzzle may be curated into any tier even if
+the logical solver rates it differently or cannot solve it without search.
+Generated puzzles always satisfy their algorithmic acceptance contracts.
+
+Imports are limited to 2 MiB, 2,000 catalog rows and 2,000 informational vote rows;
+the stored curated collection is capped at 2,000 puzzles. Validation is cancellable,
+with a 200,000-search-node limit per uniqueness check. Unsupported versions,
+malformed UTF-8/JSON, duplicate keys, bad IDs, invalid/filled/nonunique/unsolvable
+grids, unknown classifications and conflicting entries produce explicit errors.
+Very expensive unique grids can be rejected by the validation budget.
+Local completion history is not truncated to the import limits. Large lifetime
+exports can exceed them: curate a bounded subset and remove `votes` before import.
+Export includes all local records and the existing collection; it is not a
+save-game or completion-history backup/restore facility.
+
+Cancelling or interrupting import leaves local data unchanged. Android document
+providers do not offer universally atomic export: a failed/interrupted export
+may leave a partial destination file; delete that file and export again.
+Cloud-backed document providers may transfer a chosen file under their own
+policies; choose local device storage to keep the entire workflow offline.
 
 ## Build
 
@@ -170,6 +285,10 @@ bundled Java 25 is newer than this pinned Gradle version supports.
 
 Development APK: `app\build\outputs\apk\debug\app-debug.apk`.
 This is a debug-signed development APK, not a Play Store release.
+It retains the production application ID. Do not install it over an existing
+phone app to try curation without explicit authorization and a save-preservation
+plan; a compatible debug installation could be replaced. Building does not
+install anything. Release version/signing configuration is unchanged by this feature.
 
 ## Public sideload releases
 
@@ -238,13 +357,20 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 blockers, replacement/clearing/undo, manual edits and reset, immutable clues,
 remaining-count clamping, exhausted-digit disarming/re-enabling, armed input and
 notes-mode transitions, persistence/corrupt saves/history bounds,
-and 24 reproducibly seeded unique puzzles across both difficulty contracts.
+and 36 reproducibly seeded unique puzzles across all three difficulty contracts.
+The curation suite exercises exact identity, classification persistence, old
+SUD2/SUD3 saves, UTF-8 and JSON validation, unique/unsolvable/ambiguous grids,
+atomic conflict rejection, export/import separation, curated-first selection,
+completion-only consumption, generated fallback and unseen entries after re-import.
 
 Device tests exercise the real native controls, digit switching/cancelling,
 outside taps, given-cell behavior, note editing, exhausted digits, mode switching,
 menu/resume timing, settings/colors, win flow, both layouts, rotation, recreation,
 and generation on hardware. Each test backs up and restores the current game
-and settings around its deterministic fixtures. Do not interact with the app
+and settings and puzzle library (including atomic-file recovery artifacts) around its
+deterministic fixtures. A new curation device test covers native classification,
+offered-difficulty best-time preservation, Medium preferences, curated selection
+and restart/Resume consumption. Do not interact with the app
 while tests are running.
 Theme checks temporarily request system light/dark mode and restore the original
 setting. On devices that lock that system setting, tests explicitly report the

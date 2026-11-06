@@ -19,6 +19,7 @@ public final class EngineTests {
         exhaustedDigitsAndModes();
         duplicatePrevention();
         persistence();
+        CurationTests.run();
         generation();
         System.out.println("PASS: " + checks + " engine assertions");
     }
@@ -287,7 +288,8 @@ public final class EngineTests {
         for (Sudoku.Difficulty difficulty : Sudoku.Difficulty.values()) {
             for (int i = 0; i < 12; i++) {
                 long before = System.currentTimeMillis();
-                Sudoku.Puzzle puzzle = Sudoku.generate(difficulty, new Random(41000L + difficulty.ordinal() * 100 + i));
+                int seedTier = difficulty == Sudoku.Difficulty.HARD ? 1 : difficulty == Sudoku.Difficulty.MEDIUM ? 2 : 0;
+                Sudoku.Puzzle puzzle = Sudoku.generate(difficulty, new Random(41000L + seedTier * 100 + i));
                 check(seen.add(Arrays.toString(puzzle.clues)), "Fresh independent puzzles");
                 check(Sudoku.valid(puzzle.solution) && Arrays.stream(puzzle.solution).noneMatch(v -> v == 0), "Valid complete solution");
                 check(Sudoku.solutions(puzzle.clues, 2) == 1, "Exactly one solution");
@@ -304,6 +306,11 @@ public final class EngineTests {
                         if (puzzle.clues[c] == 0 && Integer.bitCount(Sudoku.candidates(puzzle.clues, c)) == 1) directStarts++;
                     }
                     check(directStarts >= 3, "Focused offers at least three immediate naked singles");
+                } else if (difficulty == Sudoku.Difficulty.MEDIUM) {
+                    check(singles.solved && singles.hiddenSingles >= 3,
+                            "Medium requires at least three hidden singles and no advanced deductions");
+                    check(puzzle.rating.deductions == 0 && puzzle.rating.eliminations == 0,
+                            "Medium is logically intermediate between gentle Easy and advanced Hard");
                 } else {
                     Sudoku.Rating advanced = Sudoku.rate(puzzle.clues, true);
                     check(!singles.solved, "Hard cannot be solved by singles alone");
