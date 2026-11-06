@@ -334,6 +334,290 @@ public final class DeviceTests extends InstrumentationTestCase {
         }
     }
 
+    public void testDocumentPickerRoundTripAndAtomicImport() throws Throwable {
+        Sudoku.Puzzle first = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(55001));
+        Sudoku.Puzzle second = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(55002));
+        Sudoku.Puzzle medium = Sudoku.generate(Sudoku.Difficulty.MEDIUM, new Random(55003));
+        Sudoku.Puzzle hard = Sudoku.generate(Sudoku.Difficulty.HARD, new Random(55004));
+        PuzzleLibrary catalog = new PuzzleLibrary().importCollection(collectionJson(
+                catalogRow(first) + "," + catalogRow(second) + "," + catalogRow(medium) + "," + catalogRow(hard))).library;
+        Game completed = new Game(first);
+        System.arraycopy(completed.solution, 0, completed.values, 0, 81);
+        catalog.classify(completed, Sudoku.Difficulty.MEDIUM);
+        writeLibrary(catalog);
+        Game unfinished = new Game(second);
+        unfinished.elapsedMillis = 91000;
+        unfinished.setAutoNotes(true);
+        unfinished.showMistakes = true;
+        unfinished.selected = firstEmpty(unfinished);
+        unfinished.setNoteMode(true);
+        unfinished.enter(unfinished.solution[unfinished.selected]);
+        write(unfinished);
+        launch();
+        byte[] currentBefore = Files.readAllBytes(saveFile().toPath());
+        clickText("Settings");
+        String filename = "sudoku-validation-" + System.currentTimeMillis() + ".json";
+        String badFilename = filename.replace(".json", "-invalid.json");
+        String conflictFilename = filename.replace(".json", "-conflict.json");
+        try {
+            exportThroughPicker(filename);
+            waitExternalText("Puzzle records exported");
+            capture("sudoku-document-export.png");
+            clickExternal("OK");
+            String exported = shellOutput("cat /sdcard/Download/" + filename);
+            assertEquals("The real document provider wrote the exact interoperable export", catalog.exportJson(), exported);
+            assertTrue("Export leaves the unfinished game byte-for-byte unchanged",
+                    Arrays.equals(currentBefore, Files.readAllBytes(saveFile().toPath())));
+
+            finishActivity();
+            PuzzleLibrary localHistory = new PuzzleLibrary();
+            localHistory.recordCompletion(completed);
+            writeLibrary(localHistory);
+            launch(); clickText("Settings");
+            importThroughPicker(filename);
+            waitExternalText("Collection imported");
+            capture("sudoku-document-import.png");
+            clickExternal("OK");
+            PuzzleLibrary imported = readLibrary();
+            assertEquals(4, imported.curatedCount());
+            assertEquals("Local completion survives a collection import", 1, imported.completedCount());
+            assertNull("Another export's classification never replaces the local vote", imported.vote(completed).classification);
+            assertTrue(Arrays.equals(second.clues, imported.nextCurated(Sudoku.Difficulty.FOCUSED).clues));
+            assertTrue(Arrays.equals(medium.clues, imported.nextCurated(Sudoku.Difficulty.MEDIUM).clues));
+            assertTrue(Arrays.equals(hard.clues, imported.nextCurated(Sudoku.Difficulty.HARD).clues));
+            assertTrue(Arrays.equals(currentBefore, Files.readAllBytes(saveFile().toPath())));
+            importThroughPicker(filename);
+            waitExternalText("Collection imported");
+            assertNotNull("Re-import reports duplicates explicitly", externalNode(
+                    "0 new puzzles; 4 identical duplicates skipped; 1 vote records not imported.\nCompleted puzzle history and your current game are unchanged.", null));
+            clickExternal("OK");
+            assertEquals(1, readLibrary().completedCount());
+
+            String beforeFailure = readLibrary().exportJson();
+            exportThroughPicker(badFilename);
+            waitExternalText("Puzzle records exported"); clickExternal("OK");
+            writeDocumentFixture(badFilename, exported.replace("\"version\": 1", "\"version\": 2"));
+            importThroughPicker(badFilename);
+            waitExternalText("Puzzle transfer failed");
+            capture("sudoku-document-rejection.png");
+            clickExternal("OK");
+            assertEquals("Unsupported version rejects atomically", beforeFailure, readLibrary().exportJson());
+            assertTrue(Arrays.equals(currentBefore, Files.readAllBytes(saveFile().toPath())));
+            for (String rejected : new String[]{"{\"format\":", collectionJson(
+                    "{\"id\":\"" + PuzzleLibrary.id(new int[81]) + "\",\"givens\":\""
+                            + PuzzleLibrary.givens(new int[81]) + "\",\"difficulty\":\"Easy\"}")}) {
+                writeDocumentFixture(badFilename, rejected);
+                importThroughPicker(badFilename);
+                waitExternalText("Puzzle transfer failed");
+                clickExternal("OK");
+                assertEquals("Malformed and nonunique documents leave the collection unchanged",
+                        beforeFailure, readLibrary().exportJson());
+                assertTrue(Arrays.equals(currentBefore, Files.readAllBytes(saveFile().toPath())));
+            }
+            Sudoku.Puzzle newEntry = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(55005));
+            String conflicting = collectionJson(catalogRow(newEntry) + "," + catalogRow(first).replace("\"Easy\"", "\"Hard\""));
+            exportThroughPicker(conflictFilename);
+            waitExternalText("Puzzle records exported"); clickExternal("OK");
+            writeDocumentFixture(conflictFilename, conflicting);
+            importThroughPicker(conflictFilename);
+            waitExternalText("Puzzle transfer failed");
+            clickExternal("OK");
+            assertEquals("Conflict rejects atomically through the real document picker", beforeFailure, readLibrary().exportJson());
+            assertTrue(Arrays.equals(currentBefore, Files.readAllBytes(saveFile().toPath())));
+        } finally {
+            shell("rm -f /sdcard/Download/" + filename + " /sdcard/Download/" + badFilename
+                    + " /sdcard/Download/" + conflictFilename);
+        }
+    }
+
+    public void testNativeCuratedAbandonmentExhaustionAndAllTiers() throws Throwable {
+        Sudoku.Puzzle easy = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(56001));
+        Sudoku.Puzzle medium = Sudoku.generate(Sudoku.Difficulty.MEDIUM, new Random(56002));
+        Sudoku.Puzzle hard = Sudoku.generate(Sudoku.Difficulty.HARD, new Random(56003));
+        writeLibrary(new PuzzleLibrary().importCollection(collectionJson(
+                catalogRow(easy) + "," + catalogRow(medium) + "," + catalogRow(hard))).library);
+        if (saveFile().exists()) assertTrue(saveFile().delete());
+        launch();
+        for (Sudoku.Puzzle puzzle : new Sudoku.Puzzle[]{easy, medium, hard}) {
+            if (savedOrNull() != null && !saved().won()) {
+                finishActivity();
+                // Only validation fixtures are replaced; never touch the player installation.
+                assertTrue(saveFile().delete());
+                launch();
+            }
+            clickPrefix(puzzle.difficulty.label); waitForGame();
+            assertTrue("Native difficulty selection serves its curated tier", Arrays.equals(puzzle.clues, saved().clues));
+            assertEquals(puzzle.difficulty, saved().difficulty);
+            View menu = findNamed(activity.getWindow().getDecorView(), "Menu");
+            assertNotNull(menu);
+            runTestOnUiThread(() -> assertTrue(menu.performClick()));
+            getInstrumentation().waitForIdleSync();
+            assertEquals(0, readLibrary().completedCount());
+            clickPrefix("Resume ");
+            assertTrue(Arrays.equals(puzzle.clues, saved().clues));
+        }
+        finishActivity();
+        assertTrue(saveFile().delete());
+        launch(); clickPrefix("Medium"); waitForGame();
+        Game almost = saved();
+        finishActivity();
+        System.arraycopy(almost.solution, 0, almost.values, 0, 81);
+        int finalCell = firstEmpty(almost);
+        almost.values[finalCell] = 0;
+        almost.elapsedMillis = 61000;
+        write(almost); launch(); clickPrefix("Resume ");
+        clickNumber(almost.solution[finalCell]); selectCell(board(), finalCell);
+        SystemClock.sleep(1900);
+        assertTrue(saved().won());
+        assertEquals(1, readLibrary().completedCount());
+        assertEquals(saved().elapsedMillis, settings().getLong("bestTime.MEDIUM", -1));
+        assertEquals(-1L, settings().getLong("bestTime.FOCUSED", -1));
+        assertEquals(-1L, settings().getLong("bestTime.HARD", -1));
+        assertNull(readLibrary().nextCurated(Sudoku.Difficulty.MEDIUM));
+        clickText("Done"); clickPrefix("Medium"); waitForGame();
+        Game fallback = saved();
+        assertFalse("Exhausted curated tier does not cycle", Arrays.equals(medium.clues, fallback.clues));
+        Sudoku.Rating rating = Sudoku.rate(fallback.clues, false);
+        assertTrue("Native exhaustion falls back to certified Medium generation", rating.solved && rating.hiddenSingles >= 3);
+        assertEquals(1, readLibrary().completedCount());
+        rotate(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+        capture("sudoku-curation-landscape.png");
+        rotate(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);
+        capture("sudoku-curation-portrait.png");
+        finishActivity(); launch(); clickPrefix("Resume ");
+        assertTrue(Arrays.equals(fallback.clues, saved().clues));
+        assertEquals(1, readLibrary().completedCount());
+        clickText("Menu"); clickText("Settings");
+        byte[] beforeImport = Files.readAllBytes(saveFile().toPath());
+        String filename = "sudoku-validation-new-" + System.currentTimeMillis() + ".json";
+        try {
+            exportThroughPicker(filename);
+            waitExternalText("Puzzle records exported"); clickExternal("OK");
+            Sudoku.Puzzle newlyCurated = Sudoku.generate(Sudoku.Difficulty.MEDIUM, new Random(56004));
+            writeDocumentFixture(filename, collectionJson(catalogRow(medium) + "," + catalogRow(newlyCurated)));
+            importThroughPicker(filename);
+            waitExternalText("Collection imported"); clickExternal("OK");
+            assertEquals("Previously completed catalog entries stay consumed on re-import", 1, readLibrary().completedCount());
+            assertTrue("Import preserves the unfinished generated fallback game",
+                    Arrays.equals(beforeImport, Files.readAllBytes(saveFile().toPath())));
+            clickText("Close settings");
+            clickPrefix("Medium"); clickExternal("Start new game"); waitForGame();
+            assertTrue("Newly imported unseen entries take priority again",
+                    Arrays.equals(newlyCurated.clues, saved().clues));
+            assertEquals(1, readLibrary().completedCount());
+        } finally { shell("rm -f /sdcard/Download/" + filename); }
+    }
+
+    private Game savedOrNull() throws Exception { return saveFile().exists() ? saved() : null; }
+
+    private String catalogRow(Sudoku.Puzzle puzzle) {
+        return "{\"id\":\"" + PuzzleLibrary.id(puzzle.clues) + "\",\"givens\":\""
+                + PuzzleLibrary.givens(puzzle.clues) + "\",\"difficulty\":\"" + puzzle.difficulty.label + "\"}";
+    }
+
+    private String collectionJson(String rows) {
+        return "{\"format\":\"quietgrid-sudoku\",\"version\":1,\"puzzles\":[" + rows + "],\"votes\":[]}";
+    }
+
+    private void writeLibrary(PuzzleLibrary library) throws Exception {
+        try (DataOutputStream out = new DataOutputStream(new FileOutputStream(
+                new File(getInstrumentation().getTargetContext().getFilesDir(), "puzzle-library.bin")))) {
+            library.write(out);
+        }
+    }
+
+    private PuzzleLibrary readLibrary() throws Exception {
+        getInstrumentation().waitForIdleSync();
+        try (DataInputStream in = new DataInputStream(new FileInputStream(
+                new File(getInstrumentation().getTargetContext().getFilesDir(), "puzzle-library.bin")))) {
+            return PuzzleLibrary.read(in);
+        }
+    }
+
+    private String shellOutput(String command) throws Exception {
+        try (android.os.ParcelFileDescriptor result = getInstrumentation().getUiAutomation().executeShellCommand(command);
+             FileInputStream input = new FileInputStream(result.getFileDescriptor());
+             java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            return bytes.toString(java.nio.charset.StandardCharsets.UTF_8.name());
+        }
+    }
+
+    private AccessibilityNodeInfo externalNode(String label, String className) {
+        AccessibilityNodeInfo root = getInstrumentation().getUiAutomation().getRootInActiveWindow();
+        return externalNode(root, label, className);
+    }
+
+    private AccessibilityNodeInfo externalNode(AccessibilityNodeInfo node, String label, String className) {
+        if (node == null) return null;
+        boolean matchesLabel = label == null || node.getText() != null && label.equalsIgnoreCase(node.getText().toString())
+                || node.getContentDescription() != null && label.equalsIgnoreCase(node.getContentDescription().toString());
+        if (matchesLabel && (className == null || className.contentEquals(node.getClassName()))) return node;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo match = externalNode(node.getChild(i), label, className);
+            if (match != null) return match;
+        }
+        return null;
+    }
+
+    private void waitExternalText(String label) throws Exception {
+        for (int i = 0; i < 100; i++) {
+            getInstrumentation().waitForIdleSync();
+            if (externalNode(label, null) != null) return;
+            SystemClock.sleep(100);
+        }
+        capture("sudoku-picker-failure.png");
+        fail("Android UI did not show: " + label);
+    }
+
+    private void clickExternal(String label) throws Exception {
+        waitExternalText(label);
+        AccessibilityNodeInfo node = externalNode(label, null);
+        while (node != null && !node.getActionList().contains(
+                AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK)) node = node.getParent();
+        assertNotNull("Clickable native target: " + label, node);
+        assertTrue("Native click succeeds: " + label, node.performAction(AccessibilityNodeInfo.ACTION_CLICK));
+        getInstrumentation().waitForIdleSync();
+        SystemClock.sleep(250);
+    }
+
+    private void openPickerDownloads() throws Exception {
+        waitExternalText("Show roots");
+        clickExternal("Show roots");
+        clickExternal("Downloads");
+        SystemClock.sleep(500);
+    }
+
+    private void importThroughPicker(String filename) throws Exception {
+        clickText("Import curated collection");
+        openPickerDownloads();
+        clickExternal(filename);
+    }
+
+    private void exportThroughPicker(String filename) throws Exception {
+        clickText("Export puzzle records");
+        openPickerDownloads();
+        AccessibilityNodeInfo name = externalNode(null, "android.widget.EditText");
+        assertNotNull("Android create-document filename field is present", name);
+        android.os.Bundle value = new android.os.Bundle();
+        value.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, filename);
+        assertTrue(name.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, value));
+        clickExternal("Save");
+    }
+
+    private void writeDocumentFixture(String filename, String json) throws Exception {
+        String encoded = java.util.Base64.getEncoder().encodeToString(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        File script = new File(getInstrumentation().getTargetContext().getExternalFilesDir(null), "document-fixture.sh");
+        Files.write(script.toPath(), ("echo " + encoded + " | base64 -d > /sdcard/Download/" + filename)
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        try {
+            assertEquals("", shellOutput("sh " + script.getAbsolutePath()));
+            assertEquals("The exact rejected fixture was written", json, shellOutput("cat /sdcard/Download/" + filename));
+        } finally { assertTrue(script.delete()); }
+    }
+
     public void testPersonalBestTimes() throws Throwable {
         Game fixture = focused();
         fixture.elapsedMillis = 272000;
@@ -715,18 +999,25 @@ public final class DeviceTests extends InstrumentationTestCase {
         for (int appearance : new int[]{1, 2}) {
             Game fixture = focused();
             assertTrue(settings().edit().putInt("appearance", appearance).commit());
-            write(fixture); launch(); clickPrefix("Resume ");
+            write(fixture); launch();
+            runTestOnUiThread(() -> {
+                View resume = findPrefix(activity.getWindow().getDecorView(), "Resume ");
+                assertNotNull("Fixture starts from the native resume menu", resume);
+                assertTrue(resume.performClick());
+            });
+            waitForGame();
             for (int orientation : new int[]{ActivityInfo.SCREEN_ORIENTATION_PORTRAIT,
                     ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE}) {
                 rotate(orientation);
+                waitForGame();
                 float density = activity.getResources().getDisplayMetrics().density;
                 Rect screen = new Rect();
                 activity.getWindow().getDecorView().getWindowVisibleDisplayFrame(screen);
-                for (View control : new View[]{
-                        findNamed(activity.getWindow().getDecorView(), "Undo"),
-                        findNamed(activity.getWindow().getDecorView(), "Erase"),
-                        findPrefix(activity.getWindow().getDecorView(), "Notes: ")}) {
-                    assertNotNull(control);
+                for (String name : new String[]{"Undo", "Erase", "Notes: "}) {
+                    View control = name.equals("Notes: ") ? findPrefix(activity.getWindow().getDecorView(), name)
+                            : findNamed(activity.getWindow().getDecorView(), name);
+                    if (control == null) capture("sudoku-padded-control-failure.png");
+                    assertNotNull("Padded " + name + " exists in orientation " + orientation, control);
                     int padding = Math.round(16 * density);
                     assertEquals(padding, control.getPaddingLeft());
                     assertEquals(padding, control.getPaddingRight());

@@ -385,18 +385,39 @@ curated selection and restart/Resume consumption. Each test normally
 restores them in teardown, but a process crash can prevent that cleanup; keep a
 durable backup if you choose to retain anything in the validation installation.
 Do not interact with it while tests are running.
-Theme checks temporarily request system light/dark mode and restore the original
+The document-picker test creates actual JSON documents in Downloads, verifies
+their exported bytes, imports/re-imports them through Android's native picker,
+and checks atomic rejection of malformed, unsupported, nonunique and conflicting
+collections without changing the unfinished game's saved bytes. Its uniquely
+named document fixtures are deleted afterward. The native curation lifecycle
+test covers all tiers, abandonment/Resume, completion-only consumption, Medium
+generation after exhaustion, and newly imported unseen entries taking priority.
+New UI assertions use `runTestOnUiThread` so failures propagate to instrumentation
+rather than crashing the app's main thread.
+
+The optional `testSystemThemeChangesPreserveGame` check temporarily requests system light/dark mode and restores the original
 setting. On devices that lock that system setting, tests explicitly report the
 limitation and validate configuration-specific board rendering and contrast instead;
-they do not claim a live system-theme transition occurred.
+they do not claim a live system-theme transition occurred. The command below
+excludes that check, leaving OS settings unchanged.
 
 ```powershell
 .\gradlew.bat --no-daemon :app:assembleValidation :app:assembleValidationAndroidTest
 & $adb -s <authorized-serial> install -r .\app\build\outputs\apk\validation\app-validation.apk
 & $adb -s <authorized-serial> install -r .\app\build\outputs\apk\androidTest\validation\app-validation-androidTest.apk
-& $adb -s <authorized-serial> shell am instrument -w -r -e class com.quietgrid.sudoku.DeviceTests com.quietgrid.sudoku.validation.test/android.test.InstrumentationTestRunner
+$methods = [regex]::Matches((Get-Content .\app\src\androidTest\java\com\quietgrid\sudoku\DeviceTests.java -Raw), 'public void (test\w+)\(') |
+    ForEach-Object { $_.Groups[1].Value } |
+    Where-Object { $_ -ne 'testSystemThemeChangesPreserveGame' }
+$tests = ($methods | ForEach-Object { "com.quietgrid.sudoku.DeviceTests#$_" }) -join ','
+$result = & $adb -s <authorized-serial> shell am instrument -w -r -e class $tests com.quietgrid.sudoku.validation.test/android.test.InstrumentationTestRunner
+$result
+if (($result -join "`n") -notmatch "OK \($($methods.Count) tests?\)") {
+    throw 'Native instrumentation did not explicitly pass every requested test.'
+}
 ```
 
+Do not treat adb's exit code alone as success: instrumentation can exit zero
+while reporting failed assertions. Require the explicit `OK (N tests)` result.
 Successful device tests save `sudoku-menu.png`, `sudoku-settings.png`,
 `sudoku-portrait.png`, `sudoku-landscape.png`, and `sudoku-win.png` under the app's
 external files directory. No emulator or USB-driver installation is necessary
