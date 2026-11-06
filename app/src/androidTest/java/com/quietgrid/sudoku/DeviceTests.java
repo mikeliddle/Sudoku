@@ -36,6 +36,8 @@ public final class DeviceTests extends InstrumentationTestCase {
 
     @Override protected void setUp() throws Exception {
         super.setUp();
+        assertEquals("Device fixtures must never target the player installation",
+                "com.quietgrid.sudoku.validation", getInstrumentation().getTargetContext().getPackageName());
         File file = saveFile();
         originalSave = file.exists() ? Files.readAllBytes(file.toPath()) : null;
         originalSettings = settings().getAll();
@@ -617,6 +619,98 @@ public final class DeviceTests extends InstrumentationTestCase {
         getInstrumentation().waitForIdleSync();
     }
 
+    public void testSudokuLauncherIcon() throws Exception {
+        android.content.Context context = getInstrumentation().getTargetContext();
+        String namespace = "http://schemas.android.com/apk/res/android";
+        int[] givens = new int[81];
+        int count = 0;
+        boolean cells = false, boxes = false, outline = false;
+        try (android.content.res.XmlResourceParser xml = context.getResources().getXml(R.drawable.ic_sudoku)) {
+            while (xml.next() != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (xml.getEventType() != org.xmlpull.v1.XmlPullParser.START_TAG) continue;
+                String name = xml.getAttributeValue(namespace, "name");
+                if ("cell_lines".equals(name) || "box_lines".equals(name)) {
+                    boolean thick = "box_lines".equals(name);
+                    StringBuilder expected = new StringBuilder();
+                    for (boolean vertical : new boolean[]{true, false}) {
+                        for (int i = 1; i < 9; i++) {
+                            if ((i % 3 == 0) != thick) continue;
+                            float coordinate = 31.5f + i * 5;
+                            expected.append(vertical ? "M" + coordinate + ",31.5V76.5"
+                                    : "M31.5," + coordinate + "H76.5");
+                        }
+                    }
+                    assertEquals("Exactly nine equal cells and three equal boxes per axis",
+                            expected.toString(), xml.getAttributeValue(namespace, "pathData"));
+                    assertEquals(thick ? "0.75" : "0.3", xml.getAttributeValue(namespace, "strokeWidth"));
+                    if (thick) boxes = true; else cells = true;
+                } else if ("board_outline".equals(name)) {
+                    assertEquals("M31.5,31.5H76.5V76.5H31.5Z", xml.getAttributeValue(namespace, "pathData"));
+                    outline = true;
+                } else if (name != null && name.startsWith("given_")) {
+                    java.util.regex.Matcher match = java.util.regex.Pattern.compile("given_r([0-8])_c([0-8])_([1-9])").matcher(name);
+                    assertTrue(match.matches());
+                    int row = Integer.parseInt(match.group(1)), column = Integer.parseInt(match.group(2));
+                    assertEquals(0, givens[row * 9 + column]);
+                    givens[row * 9 + column] = Integer.parseInt(match.group(3));
+                    assertEquals(32.9f + column * 5, Float.parseFloat(xml.getAttributeValue(namespace, "translateX")), .001f);
+                    assertEquals(32.4f + row * 5, Float.parseFloat(xml.getAttributeValue(namespace, "translateY")), .001f);
+                    count++;
+                }
+            }
+        }
+        assertTrue(cells && boxes && outline);
+        assertEquals(9, count);
+        assertTrue("No conflicting givens", Sudoku.valid(givens));
+        assertEquals("Givens extend to a valid completed Sudoku", 1, Sudoku.solutions(givens, 1));
+        assertContrast("Launcher numerals", context.getColor(R.color.launcher_ink), 0xFFFFF9ED, 4.5);
+        android.graphics.drawable.Drawable displayedIcon =
+                context.getPackageManager().getApplicationIcon(context.getPackageName());
+        assertNotNull(displayedIcon);
+        android.graphics.drawable.Drawable icon;
+        try (android.content.res.XmlResourceParser xml = context.getResources().getXml(R.mipmap.ic_launcher)) {
+            icon = android.graphics.drawable.Drawable.createFromXml(context.getResources(), xml);
+        }
+        assertTrue("Packaged launcher asset is adaptive even when OEM themes wrap app icons",
+                icon instanceof android.graphics.drawable.AdaptiveIconDrawable);
+        android.graphics.drawable.Drawable foreground = context.getDrawable(R.drawable.ic_sudoku);
+        Bitmap sheet = Bitmap.createBitmap(576, 288, Bitmap.Config.ARGB_8888);
+        android.graphics.Canvas canvas = new android.graphics.Canvas(sheet);
+        canvas.drawColor(0xFFDFE5E0);
+        for (int size : new int[]{48, 192}) {
+            int x = size == 48 ? 36 : 132;
+            android.graphics.drawable.Drawable rendered = size == 192 ? displayedIcon : icon;
+            rendered.setBounds(x, 48, x + size, 48 + size);
+            rendered.draw(canvas);
+            assertEquals("Warm-white board at launcher sizes", 0xFFFFF9ED, sheet.getPixel(x + size / 2, 48 + size / 2));
+        }
+        canvas.save();
+        android.graphics.Path circle = new android.graphics.Path();
+        circle.addCircle(456, 144, 96, android.graphics.Path.Direction.CW);
+        canvas.clipPath(circle);
+        canvas.drawColor(context.getColor(R.color.launcher_background));
+        canvas.translate(360, 48);
+        canvas.scale(192f / 72, 192f / 72);
+        foreground.setBounds(-18, -18, 90, 90);
+        foreground.draw(canvas);
+        canvas.restore();
+        assertEquals("Orange circle mask background", 0xFFFF8500, sheet.getPixel(456, 60));
+        assertEquals("Board survives a circular launcher mask", 0xFFFFF9ED, sheet.getPixel(456, 144));
+        Bitmap content = Bitmap.createBitmap(108, 108, Bitmap.Config.ARGB_8888);
+        foreground.setBounds(0, 0, 108, 108);
+        foreground.draw(new android.graphics.Canvas(content));
+        for (int y = 0; y < 108; y++) for (int x = 0; x < 108; x++) {
+            if ((content.getPixel(x, y) >>> 24) != 0) {
+                assertTrue("Artwork stays within the adaptive safe circle",
+                        Math.hypot(x + .5 - 54, y + .5 - 54) <= 33.75);
+            }
+        }
+        content.recycle();
+        try (FileOutputStream stream = new FileOutputStream(new File(context.getExternalFilesDir(null), "sudoku-launcher-native.png"))) {
+            assertTrue(sheet.compress(Bitmap.CompressFormat.PNG, 100, stream));
+        } finally { sheet.recycle(); }
+    }
+
     public void testPaddedEraseControls() throws Throwable {
         for (int appearance : new int[]{1, 2}) {
             Game fixture = focused();
@@ -998,6 +1092,86 @@ public final class DeviceTests extends InstrumentationTestCase {
         }
     }
 
+    public void testSwatchColorsStayStableAcrossSelections() throws Throwable {
+        Game fixture = focused();
+        fixture.setAutoNotes(true);
+        fixture.elapsedMillis = 63000;
+        for (boolean dark : new boolean[]{false, true}) {
+            write(fixture);
+            assertTrue(settings().edit().putInt("appearance", dark ? 2 : 1)
+                    .putInt("accentColor", 3).putLong("bestTime.HARD", 290000).commit());
+            launch(); clickPrefix("Resume "); clickText("Settings");
+            Game paused = saved();
+            assertStableSwatches(dark, 3);
+            for (int from = 0; from < MainActivity.COLOR_NAMES.length; from++) {
+                for (int to = 0; to < MainActivity.COLOR_NAMES.length; to++) {
+                    selectSwatch(from);
+                    assertStableSwatches(dark, from);
+                    selectSwatch(to);
+                    assertStableSwatches(dark, to);
+                    assertStateEquals(paused, saved());
+                    assertEquals(paused.elapsedMillis, saved().elapsedMillis);
+                    assertEquals(dark ? 2 : 1, settings().getInt("appearance", -1));
+                    assertEquals(290000L, settings().getLong("bestTime.HARD", -1));
+                }
+            }
+            recreate();
+            assertStableSwatches(dark, 7);
+            ImageButton orange = (ImageButton) findNamed(activity.getWindow().getDecorView(), "Orange");
+            getInstrumentation().runOnMainSync(() -> orange.requestRectangleOnScreen(
+                    new Rect(0, 0, orange.getWidth(), orange.getHeight()), true));
+            capture("sudoku-stable-swatches-" + (dark ? "dark" : "light") + ".png");
+            finishActivity();
+        }
+    }
+
+    private void selectSwatch(int color) throws Throwable {
+        View option = findNamed(activity.getWindow().getDecorView(), MainActivity.COLOR_NAMES[color]);
+        assertNotNull(option);
+        runTestOnUiThread(() -> assertTrue(option.performClick()));
+        getInstrumentation().waitForIdleSync();
+        assertEquals(color, settings().getInt("accentColor", -1));
+    }
+
+    private void assertStableSwatches(boolean dark, int selected) throws Throwable {
+        int[] expected = {0xFFC83B46, dark ? 0xFFFF8500 : 0xFFE68A22, 0xFFE1BE19, 0xFF368449,
+                0xFF3675C3, 0xFFCE5B96, 0xFF965EB0, 0xFF926949};
+        runTestOnUiThread(() -> {
+            android.graphics.drawable.Drawable previousFill = null;
+            for (int color = 0; color < MainActivity.COLOR_NAMES.length; color++) {
+                ImageButton option = (ImageButton) findNamed(activity.getWindow().getDecorView(),
+                        MainActivity.COLOR_NAMES[color]);
+                assertNotNull(option);
+                assertEquals(color == selected, option.isSelected());
+                assertNull("Swatch artwork must not inherit an accent image tint", option.getImageTintList());
+                android.graphics.drawable.LayerDrawable icon =
+                        (android.graphics.drawable.LayerDrawable) option.getDrawable();
+                android.graphics.drawable.GradientDrawable fill =
+                        (android.graphics.drawable.GradientDrawable) icon.getDrawable(1);
+                assertNotSame("Swatches have independent fill drawables", previousFill, fill);
+                previousFill = fill;
+                for (int[] state : new int[][]{
+                        {}, {android.R.attr.state_selected}, {android.R.attr.state_pressed},
+                        {-android.R.attr.state_enabled}}) {
+                    assertEquals(MainActivity.COLOR_NAMES[color] + " fill is independent of accent and state",
+                            expected[color], fill.getColor().getColorForState(state, 0));
+                }
+                int size = Math.round(40 * activity.getResources().getDisplayMetrics().density);
+                Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
+                Rect originalBounds = new Rect(icon.getBounds());
+                try {
+                    icon.setBounds(0, 0, size, size);
+                    icon.draw(new android.graphics.Canvas(bitmap));
+                    assertEquals(MainActivity.COLOR_NAMES[color] + " rendered center remains its own hue",
+                            expected[color], bitmap.getPixel(size / 2, size / 2));
+                } finally {
+                    icon.setBounds(originalBounds);
+                    bitmap.recycle();
+                }
+            }
+        });
+    }
+
     public void testColorChoicesPersistenceAndMigration() throws Exception {
         Game fixture = focused();
         fixture.setAutoNotes(true);
@@ -1076,6 +1250,16 @@ public final class DeviceTests extends InstrumentationTestCase {
                     assertEquals(option.getWidth(), visible.width());
                 }
                 capture("sudoku-color-picker-" + (dark ? "dark-" : "light-")
+                        + (orientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ? "landscape" : "portrait") + ".png");
+                View disclosure = findText("This app, including its code and artwork, was generated with AI under human direction.");
+                assertNotNull("AI disclosure includes the code and artwork", disclosure);
+                getInstrumentation().runOnMainSync(() -> disclosure.requestRectangleOnScreen(
+                        new Rect(0, 0, disclosure.getWidth(), disclosure.getHeight()), true));
+                getInstrumentation().waitForIdleSync();
+                Rect visible = new Rect();
+                assertTrue(disclosure.getGlobalVisibleRect(visible));
+                assertEquals("Full AI disclosure is readable", disclosure.getHeight(), visible.height());
+                capture("sudoku-ai-disclosure-" + (dark ? "dark-" : "light-")
                         + (orientation == ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE ? "landscape" : "portrait") + ".png");
             }
             rotate(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT);

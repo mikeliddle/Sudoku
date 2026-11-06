@@ -4,6 +4,10 @@ A standalone, offline native Android app. Open this project in Android Studio.
 There is no in-app account, advertising, analytics, or network permission.
 Optional offline curated collections supplement an unlimited generated supply.
 
+**AI disclosure:** This app, including its code and artwork, was generated with AI
+under human direction. Third-party components retain their own attribution and
+licenses.
+
 ## Download
 
 Download **Sudoku-1.0.apk** from the
@@ -19,6 +23,9 @@ development installation; preserve any development saves before switching.
 
 ## Play
 
+The launcher icon is a pumpkin-orange adaptive icon with an upright warm-white
+9x9 Sudoku grid, heavier 3x3 dividers, and nine nonconflicting givens.
+
 The app opens on the difficulty-selection menu. **Resume** continues your unfinished
 saved game; selecting a new difficulty asks before replacing it. **Settings**
 contains Auto notes, Show mistakes, and Red, Orange, Yellow, Green, Blue, Pink,
@@ -28,7 +35,8 @@ independent of System/Light/Dark appearance. Existing Forest, Ocean, and Orchid
 preferences map to Green, Blue, and Purple without changing saved games or records.
 Dark Red and Brown use deeper, saturated button fills with light labels.
 Dark Orange uses vivid pumpkin-orange fills with dark labels. Each has coordinated
-readable accents for board entries, notes, and outlines.
+readable accents for board entries, notes, and outlines. Swatch fills keep their
+own hue regardless of the selected accent; only the selection outline changes.
 
 Select a digit in the bottom number bank to highlight matching entries and arm it.
 Matching visible notes get an accent-colored circle around that individual digit,
@@ -366,22 +374,27 @@ completion-only consumption, generated fallback and unseen entries after re-impo
 Device tests exercise the real native controls, digit switching/cancelling,
 outside taps, given-cell behavior, note editing, exhausted digits, mode switching,
 menu/resume timing, settings/colors, win flow, both layouts, rotation, recreation,
-and generation on hardware. Each test backs up and restores the current game
-and settings and puzzle library (including atomic-file recovery artifacts) around its
-deterministic fixtures. A new curation device test covers native classification,
-offered-difficulty best-time preservation, Medium preferences, curated selection
-and restart/Resume consumption. Do not interact with the app
-while tests are running.
+and generation on hardware. Swatch checks cover every accent-selection transition
+in both appearances, including native drawable colors and rendered pixels.
+Instrumentation targets the separate `com.quietgrid.sudoku.validation` package
+by default, labeled **Sudoku validation**, never the player installation. Fixtures
+replace only that validation installation's game, settings and puzzle library,
+including atomic-file recovery artifacts. A curation device test covers native
+classification, offered-difficulty best-time preservation, Medium preferences,
+curated selection and restart/Resume consumption. Each test normally
+restores them in teardown, but a process crash can prevent that cleanup; keep a
+durable backup if you choose to retain anything in the validation installation.
+Do not interact with it while tests are running.
 Theme checks temporarily request system light/dark mode and restore the original
 setting. On devices that lock that system setting, tests explicitly report the
 limitation and validate configuration-specific board rendering and contrast instead;
 they do not claim a live system-theme transition occurred.
 
 ```powershell
-.\gradlew.bat --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
-& $adb -d install -r .\app\build\outputs\apk\debug\app-debug.apk
-& $adb -d install -r .\app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk
-& $adb -d shell am instrument -w -r -e class com.quietgrid.sudoku.DeviceTests com.quietgrid.sudoku.test/android.test.InstrumentationTestRunner
+.\gradlew.bat --no-daemon :app:assembleValidation :app:assembleValidationAndroidTest
+& $adb -s <authorized-serial> install -r .\app\build\outputs\apk\validation\app-validation.apk
+& $adb -s <authorized-serial> install -r .\app\build\outputs\apk\androidTest\validation\app-validation-androidTest.apk
+& $adb -s <authorized-serial> shell am instrument -w -r -e class com.quietgrid.sudoku.DeviceTests com.quietgrid.sudoku.validation.test/android.test.InstrumentationTestRunner
 ```
 
 Successful device tests save `sudoku-menu.png`, `sudoku-settings.png`,

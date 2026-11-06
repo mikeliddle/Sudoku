@@ -520,7 +520,7 @@ public final class MainActivity extends Activity {
                 fill.setSize(dp(30), dp(30));
                 boolean darkOrange = color == 1 && (getResources().getConfiguration().uiMode
                         & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
-                fill.setColor(darkOrange ? palette.primary : Color.parseColor(COLOR_SWATCHES[color]));
+                fill.setColor(darkOrange ? new Palette(true, color).primary : Color.parseColor(COLOR_SWATCHES[color]));
                 fill.setStroke(dp(1), palette.muted);
                 android.graphics.drawable.LayerDrawable icon = new android.graphics.drawable.LayerDrawable(
                         new android.graphics.drawable.Drawable[]{ring, fill});
@@ -538,7 +538,8 @@ public final class MainActivity extends Activity {
             }
             addControl(content, colors, 56, 8);
         }
-        addCopy(content, "Your appearance and color choices apply to all games.", 14, palette.muted, 0);
+        addCopy(content, "Your appearance and color choices apply to all games.", 14, palette.muted, 16);
+        addCopy(content, getString(R.string.ai_disclosure), 14, palette.muted, 0);
     }
 
     private void persistPreference(String key, boolean value) {

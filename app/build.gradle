@@ -46,7 +46,9 @@ android {
         versionCode 2
         versionName '1.0.1'
         testInstrumentationRunner 'android.test.InstrumentationTestRunner'
+        manifestPlaceholders = [appLabel: '@string/app_name']
     }
+    testBuildType 'validation'
 
     signingConfigs {
         release {
@@ -59,6 +61,11 @@ android {
         }
     }
     buildTypes {
+        validation {
+            initWith debug
+            applicationIdSuffix '.validation'
+            manifestPlaceholders = [appLabel: 'Sudoku validation']
+        }
         release {
             debuggable false
             signingConfig signingConfigs.release
