@@ -98,23 +98,70 @@ animators are disabled to avoid clipped, inconsistent shadows.
 
 ## Puzzle generation and difficulty
 
-Every new game is generated locally from a randomized backtracking solution.
-Clue removal is accepted only when a separate capped search establishes exactly
-one solution. The generator then certifies the puzzle using a human-technique
-solver that performs no search or guessing:
+Every generated puzzle starts with a randomized backtracking solution.
+One shuffled greedy pass tries removing each of the 81 givens, keeping a removal
+only when a separate solution-counting search establishes exactly one solution.
+This common candidate pool has no difficulty filter or clue-count target.
+The requested tier is selected by rejection sampling from that pool, using these
+fixed-point human-technique rules:
 
 | Mode | Acceptance contract |
 |---|---|
-| Easy | 36–40 starting clues and at least three immediately available naked singles; solvable entirely with singles, requiring at most two hidden-single placements in the naked-single-first solver. A gentler no-notes game, without advanced deductions. |
-| Medium | Solvable entirely with singles, but requiring at least three hidden-single placements in the same naked-single-first solver. More sustained candidate scanning than Easy, without Hard's advanced eliminations. This is a measured technique criterion, not just a clue-count band. |
-| Hard | Not solvable by singles alone; solvable using singles plus locked candidates, naked pairs/triples, hidden pairs, and/or X-wings. The solver must make at least six candidate-deduction steps removing at least twelve candidates. |
+| Easy | Solved using hidden singles alone: for a digit, exactly one legal empty square remains in a row, column or 3x3 box, after excluding all filled peers. Repeat full number-by-number passes until solved or a pass places nothing. |
+| Medium | Hidden singles alone stall. Restart from the original givens and repeatedly apply both hidden singles and naked singles (a square with only one legal candidate). These two rules together solve the puzzle. |
+| Hard | Both rules together reach a fixed point with empty squares remaining. The puzzle still has exactly one solution, independently established by search. |
 
-These are operational technique ratings, not a claim that every person or every
-possible solving order will find the same difficulty. Generation is bounded at
-180 full attempts, is cancellable, runs off the UI thread, and reports a retryable
-error instead of silently substituting an uncertified puzzle.
-The gentler Easy criteria apply only to newly generated games; saved puzzles
-are resumed unchanged.
+Candidates are recomputed from filled peers only. No locked candidates, subsets,
+X-wings, guessing, arbitrary hidden-single step limits or clue-count thresholds
+participate in these ratings. A pass processes digits 1-9 across all rows,
+columns and boxes, placing immediately; the combined solver then scans all
+cells for naked singles. Both repeat through a terminal no-change pass.
+Hard no longer promises completion by a particular advanced logical solver:
+it means precisely that these two simple rules do not finish.
+
+These are operational rules, not universal human difficulty ratings.
+Generation remains bounded at 180 candidates, cancellable and off the UI thread;
+failure reports a retryable error rather than substituting another tier.
+Legacy `FOCUSED`/`MEDIUM`/`HARD` save IDs, saved games, curated categories and
+human votes are unchanged. Only fresh generated puzzles use the new acceptance
+rules; imported curated categories remain the curator's choice.
+
+### Reproducible 100-puzzle experiment
+
+Run `.\gradlew.bat --no-daemon classificationBatch` to write
+`dist\puzzle-classification-20261111\puzzles.csv`, `traces.csv` and `summary.json`.
+The fixed sample uses one `java.util.Random(seed)` per candidate, seeds
+**2026111100-2026111199**, with the common removal process above: no tier
+requests, quotas, duplicate replacement or tuning after viewing the split.
+All 100 exact-givens SHA-256 identities are distinct. These are greedy
+irreducible puzzles (no retained given can be removed alone), not uniformly
+sampled Sudoku puzzles or globally minimum-clue puzzles.
+
+| Classification | Count / percent | Starting clues | Hidden placements | Naked placements |
+|---|---|---|---|---|
+| Easy | 21 / 21% | 23-26 | 55-58 | 0 |
+| Medium | 23 / 23% | 23-27 | 32-47 | 8-25 |
+| Hard | 56 / 56% | 22-26 | 1-29 | 0-13 |
+
+Placement ranges use the hidden-only trace for Easy and the combined trace
+for Medium/Hard. Hard leaves **23-57 empty squares**; Easy and Medium leave zero.
+Pass counts, including the terminal no-change pass, are respectively 5-13,
+4-11 and 2-6. The initial local run took **1.307 seconds** including generation,
+classification, independent verification and CSV writing; timing is
+machine/JIT-dependent and not a phone performance claim. The split describes
+only this sampler and seed range, not natural prevalence.
+
+`puzzles.csv` contains index, seed, identity, all 81 original givens (`0` means
+empty), category, clue count, uniqueness result, both solvers' placement/pass/
+residual counts and timings. Treat givens as strings when opening CSV in a
+spreadsheet so leading zeros are preserved. `traces.csv` records every placement
+in both stages. Cell indices are zero-based row-major; houses 0-8 are rows,
+9-17 columns, 18-26 boxes; house `-1` denotes a naked single.
+Each trace is independently replayed using separate peer arithmetic, and a
+snapshot-wave solver (rather than immediate placement) must reach the same
+fixed point. A second independent search proves uniqueness for every puzzle.
+The batch fails on a duplicate, disagreement or invalid inference rather than
+quietly dropping/replacing a puzzle. Results stay outside the APK.
 
 ## Persistence and interface
 

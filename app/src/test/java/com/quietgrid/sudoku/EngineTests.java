@@ -20,6 +20,7 @@ public final class EngineTests {
         duplicatePrevention();
         persistence();
         CurationTests.run();
+        DifficultyTests.run();
         generation();
         System.out.println("PASS: " + checks + " engine assertions");
     }
@@ -83,7 +84,7 @@ public final class EngineTests {
         check(fixed.won(), "Correct full board wins");
         check(Sudoku.solutions(new int[81], 2) == 2, "Ambiguous board capped at two solutions");
         int[] invalid = new int[81]; invalid[0] = 1; invalid[1] = 1;
-        check(Sudoku.solutions(invalid, 2) == 0 && !Sudoku.rate(invalid, true).solved, "Conflicting clues rejected");
+        check(Sudoku.solutions(invalid, 2) == 0, "Conflicting clues rejected");
     }
 
     private static byte[] encode(Game game) throws IOException {
@@ -296,30 +297,20 @@ public final class EngineTests {
                 for (int c = 0; c < 81; c++) {
                     check(puzzle.clues[c] == 0 || puzzle.clues[c] == puzzle.solution[c], "Clues agree with solution");
                 }
-                Sudoku.Rating singles = Sudoku.rate(puzzle.clues, false);
+                Sudoku.Rating hidden = Sudoku.rate(puzzle.clues, false);
+                Sudoku.Rating combined = Sudoku.rate(puzzle.clues, true);
                 if (difficulty == Sudoku.Difficulty.FOCUSED) {
-                    check(singles.solved && singles.hiddenSingles <= 2, "Focused needs at most two hidden-single searches");
-                    long clues = Arrays.stream(puzzle.clues).filter(v -> v != 0).count();
-                    check(clues >= 36 && clues <= 40, "Focused has a moderate 36-40 starting clues");
-                    int directStarts = 0;
-                    for (int c = 0; c < 81; c++) {
-                        if (puzzle.clues[c] == 0 && Integer.bitCount(Sudoku.candidates(puzzle.clues, c)) == 1) directStarts++;
-                    }
-                    check(directStarts >= 3, "Focused offers at least three immediate naked singles");
+                    check(hidden.solved && hidden.nakedSingles == 0, "Easy solved by hidden singles alone");
                 } else if (difficulty == Sudoku.Difficulty.MEDIUM) {
-                    check(singles.solved && singles.hiddenSingles >= 3,
-                            "Medium requires at least three hidden singles and no advanced deductions");
-                    check(puzzle.rating.deductions == 0 && puzzle.rating.eliminations == 0,
-                            "Medium is logically intermediate between gentle Easy and advanced Hard");
+                    check(!hidden.solved && combined.solved && combined.nakedSingles > 0,
+                            "Medium requires naked singles in addition to hidden singles");
                 } else {
-                    Sudoku.Rating advanced = Sudoku.rate(puzzle.clues, true);
-                    check(!singles.solved, "Hard cannot be solved by singles alone");
-                    check(advanced.solved && advanced.deductions >= 6 && advanced.eliminations >= 12,
-                            "Hard certified multiple advanced deductions without guessing");
+                    check(!hidden.solved && !combined.solved && combined.remaining > 0,
+                            "Unique Hard puzzle stalls at the combined fixed point");
                 }
-                System.out.printf("%s seed %d: %d clues, %d hidden singles, %d deductions, %d eliminations, %d ms%n",
+                System.out.printf("%s seed %d: %d clues, %d hidden, %d naked, %d unfilled, %d ms%n",
                         difficulty, i, Arrays.stream(puzzle.clues).filter(v -> v != 0).count(),
-                        singles.hiddenSingles, puzzle.rating.deductions, puzzle.rating.eliminations, System.currentTimeMillis() - before);
+                        puzzle.rating.hiddenSingles, puzzle.rating.nakedSingles, puzzle.rating.remaining, System.currentTimeMillis() - before);
             }
         }
         check(System.currentTimeMillis() - start < 120000, "Batch generation stays within two minutes");

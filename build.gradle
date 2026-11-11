@@ -9,7 +9,9 @@ tasks.register('compileEngineTests', JavaCompile) {
         'app/src/main/java/com/quietgrid/sudoku/PuzzleLibrary.java',
         'app/src/main/java/com/quietgrid/sudoku/PuzzleJson.java',
         'app/src/test/java/com/quietgrid/sudoku/EngineTests.java',
-        'app/src/test/java/com/quietgrid/sudoku/CurationTests.java'
+        'app/src/test/java/com/quietgrid/sudoku/CurationTests.java',
+        'app/src/test/java/com/quietgrid/sudoku/DifficultyTests.java',
+        'app/src/test/java/com/quietgrid/sudoku/ClassificationBatch.java'
     )
     classpath = files()
     destinationDirectory = layout.buildDirectory.dir('engine-tests')
@@ -21,4 +23,11 @@ tasks.register('engineTest', JavaExec) {
     dependsOn 'compileEngineTests'
     classpath = files(layout.buildDirectory.dir('engine-tests'))
     mainClass = 'com.quietgrid.sudoku.EngineTests'
+}
+
+tasks.register('classificationBatch', JavaExec) {
+    dependsOn 'compileEngineTests'
+    classpath = files(layout.buildDirectory.dir('engine-tests'))
+    mainClass = 'com.quietgrid.sudoku.ClassificationBatch'
+    args layout.projectDirectory.dir('dist/puzzle-classification-20261111').asFile.absolutePath
 }

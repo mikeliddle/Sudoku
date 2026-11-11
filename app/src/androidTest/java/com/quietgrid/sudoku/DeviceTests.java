@@ -271,8 +271,8 @@ public final class DeviceTests extends InstrumentationTestCase {
         assertEquals(1, Sudoku.solutions(puzzle.clues, 2));
         assertFalse(Sudoku.rate(puzzle.clues, false).solved);
         Sudoku.Rating rating = Sudoku.rate(puzzle.clues, true);
-        assertTrue(rating.solved);
-        assertTrue(rating.deductions >= 6 && rating.eliminations >= 12);
+        assertFalse(rating.solved);
+        assertTrue(rating.remaining > 0);
     }
 
     public void testClassificationCuratedConsumptionAndMediumPreferences() throws Throwable {
@@ -477,8 +477,9 @@ public final class DeviceTests extends InstrumentationTestCase {
         clickText("Done"); clickPrefix("Medium"); waitForGame();
         Game fallback = saved();
         assertFalse("Exhausted curated tier does not cycle", Arrays.equals(medium.clues, fallback.clues));
-        Sudoku.Rating rating = Sudoku.rate(fallback.clues, false);
-        assertTrue("Native exhaustion falls back to certified Medium generation", rating.solved && rating.hiddenSingles >= 3);
+        assertFalse(Sudoku.rate(fallback.clues, false).solved);
+        Sudoku.Rating rating = Sudoku.rate(fallback.clues, true);
+        assertTrue("Native exhaustion falls back to certified Medium generation", rating.solved && rating.nakedSingles > 0);
         assertEquals(1, readLibrary().completedCount());
         rotate(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
         capture("sudoku-curation-landscape.png");

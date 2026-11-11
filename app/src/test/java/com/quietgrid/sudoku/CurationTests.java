@@ -92,7 +92,7 @@ final class CurationTests {
         Sudoku.Puzzle fallback = restored.nextPuzzle(Sudoku.Difficulty.FOCUSED, new Random(54002));
         Sudoku.Rating fallbackRating = Sudoku.rate(fallback.clues, false);
         check(fallback.difficulty == Sudoku.Difficulty.FOCUSED && Sudoku.solutions(fallback.clues, 2) == 1
-                && fallbackRating.solved && fallbackRating.hiddenSingles <= 2, "Actual exhaustion policy generates a certified puzzle");
+                && fallbackRating.solved && fallbackRating.nakedSingles == 0, "Actual exhaustion policy generates a certified puzzle");
         check(restored.completedCount() == 2, "Generated selection does not consume before completion");
         check(restored.nextCurated(Sudoku.Difficulty.MEDIUM) != null, "Easy exhaustion leaves Medium eligible");
         Sudoku.Puzzle generated = Sudoku.generate(Sudoku.Difficulty.FOCUSED, new Random(52005));
