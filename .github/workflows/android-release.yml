@@ -76,7 +76,7 @@ jobs:
           $badging = & "$tools\aapt2.exe" dump badging $apk
           if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK.' }
           $package = $badging | Select-String "^package: name='com\.quietgrid\.sudoku' versionCode='([1-9][0-9]*)' versionName='([0-9]+\.[0-9]+\.[0-9]+)'"
-          if (!$package -or ($badging -match 'application-debuggable|uses-permission:')) { throw 'Unexpected release manifest.' }
+          if (!$package -or ($badging -match 'application-debuggable|uses-permission')) { throw 'Unexpected release manifest.' }
           $code = $package.Matches[0].Groups[1].Value
           $version = $package.Matches[0].Groups[2].Value
           & "$env:JAVA_HOME\bin\java.exe" -jar "$tools\lib\apksigner.jar" verify $apk 2>$null
@@ -158,7 +158,7 @@ jobs:
             $badging = & "$tools\aapt2.exe" dump badging input\unsigned.apk
             if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK.' }
             $expected = "^package: name='com\.quietgrid\.sudoku' versionCode='$env:VERSION_CODE' versionName='$([regex]::Escape($env:VERSION))'"
-            if (!($badging -match $expected) -or ($badging -match 'application-debuggable|uses-permission:')) { throw 'Unexpected release manifest.' }
+            if (!($badging -match $expected) -or ($badging -match 'application-debuggable|uses-permission')) { throw 'Unexpected release manifest.' }
             & $java -jar "$tools\lib\apksigner.jar" verify input\unsigned.apk 2>$null
             if ($LASTEXITCODE -eq 0) { throw 'Refusing a previously signed APK.' }
             & "$tools\zipalign.exe" -c -P 16 4 input\unsigned.apk
