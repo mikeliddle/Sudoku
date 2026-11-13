@@ -1,0 +1,245 @@
+name: Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Verify only, or request owner approval for signing and publishing
+        type: choice
+        options: [verify, release]
+        default: verify
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+jobs:
+  build:
+    if: github.repository == 'mikeliddle/Sudoku' && github.ref == 'refs/heads/main'
+    runs-on: windows-2022
+    timeout-minutes: 30
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.upload.outputs.artifact-digest }}
+      apksha: ${{ steps.inspect.outputs.apksha }}
+      version: ${{ steps.inspect.outputs.version }}
+      code: ${{ steps.inspect.outputs.code }}
+    steps:
+      - name: Require protected main and owner release request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:MODE -notin @('verify', 'release')) { throw 'Unknown mode.' }
+          if ($env:MODE -eq 'release' -and ($env:ACTOR -cne 'mikeliddle' -or $env:TRIGGERING_ACTOR -cne 'mikeliddle')) {
+            throw 'Only mikeliddle may request a release.'
+          }
+          $main = gh api repos/mikeliddle/Sudoku/branches/main | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$main.protected -or $main.commit.sha -cne $env:GITHUB_SHA) {
+            throw 'The run must use the current protected main commit.'
+          }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: microsoft
+          java-version: '17'
+      - name: Check wrapper and build without release credentials
+        env:
+          SUDOKU_SIGNING_DIR: ${{ runner.temp }}\no-release-key
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((Get-FileHash gradle\wrapper\gradle-wrapper.jar -Algorithm SHA256).Hash -cne '81A82AAEA5ABCC8FF68B3DFCB58B3C3C429378EFD98E7433460610FECD7AE45F') {
+            throw 'Unreviewed Gradle wrapper.'
+          }
+          .\gradlew.bat --no-daemon --console=plain --dependency-verification strict -PunsignedRelease=true engineTest :app:assembleRelease :app:lintRelease
+          if ($LASTEXITCODE -ne 0) { throw 'Build or tests failed.' }
+      - name: Inspect unsigned release
+        id: inspect
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $apk = 'app\build\outputs\apk\release\app-release-unsigned.apk'
+          $tools = Join-Path $env:ANDROID_HOME 'build-tools\36.0.0'
+          $badging = & "$tools\aapt2.exe" dump badging $apk
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK.' }
+          $package = $badging | Select-String "^package: name='com\.quietgrid\.sudoku' versionCode='([1-9][0-9]*)' versionName='([0-9]+\.[0-9]+\.[0-9]+)'"
+          if (!$package -or ($badging -match 'application-debuggable|uses-permission:')) { throw 'Unexpected release manifest.' }
+          $code = $package.Matches[0].Groups[1].Value
+          $version = $package.Matches[0].Groups[2].Value
+          & "$env:JAVA_HOME\bin\java.exe" -jar "$tools\lib\apksigner.jar" verify $apk 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Build must be unsigned.' }
+          New-Item -ItemType Directory -Path upload | Out-Null
+          Copy-Item $apk upload\unsigned.apk
+          "apksha=$((Get-FileHash upload\unsigned.apk -Algorithm SHA256).Hash.ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "code=$code" >> $env:GITHUB_OUTPUT
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: unsigned-${{ github.sha }}
+          path: upload/unsigned.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  sign:
+    needs: build
+    if: inputs.mode == 'release' && github.ref == 'refs/heads/main'
+    environment: android-release
+    runs-on: windows-2022
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+      digest: ${{ steps.upload.outputs.artifact-digest }}
+      apksha: ${{ steps.sign.outputs.apksha }}
+    steps:
+      # No source checkout, project scripts, Gradle, or caches in this fresh job.
+      - name: Fetch and authenticate immutable unsigned artifact and signing tools
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.build.outputs.artifact }}
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $main = gh api repos/mikeliddle/Sudoku/branches/main | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$main.protected -or $main.commit.sha -cne $env:GITHUB_SHA) { throw 'Main changed; start a new run.' }
+          if ($env:ARTIFACT -notmatch '^[0-9]+$' -or $env:DIGEST -notmatch '^[a-f0-9]{64}$') { throw 'Invalid artifact identity.' }
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          Invoke-WebRequest "https://api.github.com/repos/mikeliddle/Sudoku/actions/artifacts/$env:ARTIFACT/zip" -Headers $headers -OutFile artifact.zip
+          if ((Get-FileHash artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:DIGEST) { throw 'Artifact digest mismatch.' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("$pwd\artifact.zip")
+          try {
+            if ($zip.Entries.Count -ne 1 -or $zip.Entries[0].FullName -cne 'unsigned.apk') { throw 'Unexpected artifact contents.' }
+          } finally { $zip.Dispose() }
+          Expand-Archive artifact.zip -DestinationPath input
+          Invoke-WebRequest 'https://dl.google.com/android/repository/build-tools_r36_windows.zip' -OutFile tools.zip
+          if ((Get-FileHash tools.zip -Algorithm SHA256).Hash.ToLowerInvariant() -cne 'aa1095cb14d83e483818a748a2c06faaeb8e601561b06a356a119a1b2ca280d3') { throw 'Signing tool checksum mismatch.' }
+          Expand-Archive tools.zip -DestinationPath tools
+          if (!(Test-Path tools\android-16\lib\apksigner.jar)) { throw 'Unexpected SDK archive layout.' }
+          if (!(Test-Path "$env:JAVA_HOME_17_X64\bin\java.exe")) { throw 'Runner Java 17 missing.' }
+      - name: Sign only the verified nondebuggable offline APK
+        id: sign
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          INPUT_SHA: ${{ needs.build.outputs.apksha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          VERSION_CODE: ${{ needs.build.outputs.code }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $keyDir = Join-Path $env:RUNNER_TEMP 'sudoku-release-key'
+          try {
+            if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or $env:VERSION_CODE -notmatch '^[1-9][0-9]*$') { throw 'Invalid version.' }
+            if ($env:INPUT_SHA -notmatch '^[a-f0-9]{64}$' -or (Get-FileHash input\unsigned.apk -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:INPUT_SHA) { throw 'Unsigned APK checksum mismatch.' }
+            foreach ($name in @('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_PASSWORD', 'KEY_ALIAS')) {
+              if (![Environment]::GetEnvironmentVariable($name)) { throw "Missing environment secret: $name" }
+            }
+            $tools = "$pwd\tools\android-16"
+            $java = "$env:JAVA_HOME_17_X64\bin\java.exe"
+            $badging = & "$tools\aapt2.exe" dump badging input\unsigned.apk
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect APK.' }
+            $expected = "^package: name='com\.quietgrid\.sudoku' versionCode='$env:VERSION_CODE' versionName='$([regex]::Escape($env:VERSION))'"
+            if (!($badging -match $expected) -or ($badging -match 'application-debuggable|uses-permission:')) { throw 'Unexpected release manifest.' }
+            & $java -jar "$tools\lib\apksigner.jar" verify input\unsigned.apk 2>$null
+            if ($LASTEXITCODE -eq 0) { throw 'Refusing a previously signed APK.' }
+            & "$tools\zipalign.exe" -c -P 16 4 input\unsigned.apk
+            if ($LASTEXITCODE -ne 0) { throw 'Unsigned APK is not aligned.' }
+            New-Item -ItemType Directory -Path $keyDir | Out-Null
+            $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            & icacls.exe $keyDir /inheritance:r /grant:r "*${sid}:(OI)(CI)F" '*S-1-5-18:(OI)(CI)F' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Cannot restrict temporary key storage.' }
+            [IO.File]::WriteAllBytes("$keyDir\release.jks", [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+            New-Item -ItemType Directory -Path signed | Out-Null
+            $apk = "signed\Sudoku-$env:VERSION.apk"
+            & $java -jar "$tools\lib\apksigner.jar" sign --ks "$keyDir\release.jks" --ks-key-alias $env:KEY_ALIAS --ks-pass env:STORE_PASSWORD --key-pass env:KEY_PASSWORD --out $apk input\unsigned.apk
+            if ($LASTEXITCODE -ne 0) { throw 'Signing failed.' }
+            $verified = & $java -jar "$tools\lib\apksigner.jar" verify --verbose --print-certs $apk
+            if ($LASTEXITCODE -ne 0) { throw 'Signature verification failed.' }
+            $certs = @($verified | Select-String '^Signer #[0-9]+ certificate SHA-256 digest: ([a-f0-9]+)$')
+            if ($certs.Count -ne 1 -or $certs[0].Matches[0].Groups[1].Value -cne '5f5586f9864347814393fdfa2cc5f94ab9254c44a61742ab105c29760056f2e6') { throw 'Unexpected public-release certificate.' }
+            $hash = (Get-FileHash $apk -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  Sudoku-$env:VERSION.apk" | Set-Content signed\SHA256SUMS.txt -Encoding ascii
+            "apksha=$hash" >> $env:GITHUB_OUTPUT
+            Remove-Item -LiteralPath "$apk.idsig" -ErrorAction SilentlyContinue
+          } finally {
+            if (Test-Path -LiteralPath $keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force }
+            foreach ($name in @('KEYSTORE_BASE64', 'STORE_PASSWORD', 'KEY_PASSWORD', 'KEY_ALIAS')) {
+              [Environment]::SetEnvironmentVariable($name, $null)
+            }
+          }
+      - name: Ensure temporary key cleanup even after a failed step
+        if: always()
+        run: |
+          $keyDir = Join-Path $env:RUNNER_TEMP 'sudoku-release-key'
+          if (Test-Path -LiteralPath $keyDir) { Remove-Item -LiteralPath $keyDir -Recurse -Force -ErrorAction Stop }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: signed-${{ github.sha }}
+          path: signed/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: [build, sign]
+    if: inputs.mode == 'release' && github.ref == 'refs/heads/main'
+    environment: android-release
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Authenticate immutable signed artifact and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.sign.outputs.artifact }}
+          DIGEST: ${{ needs.sign.outputs.digest }}
+          APK_SHA: ${{ needs.sign.outputs.apksha }}
+          VERSION: ${{ needs.build.outputs.version }}
+          VERSION_CODE: ${{ needs.build.outputs.code }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:VERSION -notmatch '^[0-9]+\.[0-9]+\.[0-9]+$' -or $env:VERSION_CODE -notmatch '^[1-9][0-9]*$' -or $env:APK_SHA -notmatch '^[a-f0-9]{64}$') { throw 'Invalid release metadata.' }
+          $main = gh api repos/mikeliddle/Sudoku/branches/main | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or !$main.protected -or $main.commit.sha -cne $env:GITHUB_SHA) { throw 'Main changed; start a new run.' }
+          if ($env:ARTIFACT -notmatch '^[0-9]+$' -or $env:DIGEST -notmatch '^[a-f0-9]{64}$') { throw 'Invalid artifact identity.' }
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          Invoke-WebRequest "https://api.github.com/repos/mikeliddle/Sudoku/actions/artifacts/$env:ARTIFACT/zip" -Headers $headers -OutFile artifact.zip
+          if ((Get-FileHash artifact.zip -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:DIGEST) { throw 'Signed artifact digest mismatch.' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead("$pwd\artifact.zip")
+          try {
+            $names = @($zip.Entries.FullName | Sort-Object)
+            $expected = @("SHA256SUMS.txt", "Sudoku-$env:VERSION.apk") | Sort-Object
+            if ($names.Count -ne 2 -or (Compare-Object $names $expected -CaseSensitive)) { throw 'Unexpected signed artifact contents.' }
+          } finally { $zip.Dispose() }
+          Expand-Archive artifact.zip -DestinationPath signed
+          if ((Get-FileHash "signed\Sudoku-$env:VERSION.apk" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $env:APK_SHA) { throw 'Signed APK checksum mismatch.' }
+          if ((Get-Content signed\SHA256SUMS.txt -Raw).Trim() -cne "$env:APK_SHA  Sudoku-$env:VERSION.apk") { throw 'Checksum file mismatch.' }
+          $tag = "v$env:VERSION"
+          $existing = Invoke-WebRequest "https://api.github.com/repos/mikeliddle/Sudoku/git/ref/tags/$tag" -Headers $headers -SkipHttpErrorCheck
+          if ($existing.StatusCode -ne 404) { throw 'Release tag already exists or could not be checked; refusing to reuse it.' }
+          $notes = "Reviewed source: $env:GITHUB_SHA`nAndroid versionCode: $env:VERSION_CODE`nOffline, nondebuggable APK signed with the existing public-release certificate. See SHA256SUMS.txt."
+          gh release create $tag "signed\Sudoku-$env:VERSION.apk" signed\SHA256SUMS.txt --repo mikeliddle/Sudoku --target $env:GITHUB_SHA --title "Sudoku $env:VERSION" --notes $notes --fail-on-no-commits --draft
+          if ($LASTEXITCODE -ne 0) { throw 'Draft release or asset upload failed; inspect GitHub before retrying.' }
+          gh release edit $tag --repo mikeliddle/Sudoku --draft=false
+          if ($LASTEXITCODE -ne 0) { throw 'Release publication failed; inspect GitHub before retrying.' }

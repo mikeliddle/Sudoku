@@ -2,6 +2,10 @@ plugins {
     id 'com.android.application'
 }
 
+def unsignedRelease = providers.gradleProperty('unsignedRelease').orNull
+if (unsignedRelease != null && unsignedRelease != 'true') {
+    throw new GradleException('unsignedRelease must be explicitly true, or omitted for a signed local release.')
+}
 def signingPath = System.getenv('SUDOKU_SIGNING_DIR')
 def localAppData = System.getenv('LOCALAPPDATA')
 def signingDirectory = signingPath
@@ -11,7 +15,7 @@ def signingDirectory = signingPath
                 : new File(System.getProperty('user.home'), '.quietgrid-signing')
 def signingProperties = new Properties()
 def signingPropertiesFile = new File(signingDirectory, 'signing.properties')
-if (signingPropertiesFile.exists()) {
+if (unsignedRelease == null && signingPropertiesFile.exists()) {
     signingPropertiesFile.withInputStream { signingProperties.load(it) }
 }
 
@@ -52,7 +56,7 @@ android {
 
     signingConfigs {
         release {
-            if (signingPropertiesFile.exists()) {
+            if (unsignedRelease == null && signingPropertiesFile.exists()) {
                 storeFile new File(signingDirectory, signingProperties.getProperty('storeFile'))
                 storePassword signingProperties.getProperty('storePassword')
                 keyAlias signingProperties.getProperty('keyAlias')
@@ -68,7 +72,7 @@ android {
         }
         release {
             debuggable false
-            signingConfig signingConfigs.release
+            signingConfig unsignedRelease == 'true' ? null : signingConfigs.release
         }
     }
     sourceSets.main.assets.srcDir layout.buildDirectory.dir('generated/legalAssets')
@@ -79,7 +83,7 @@ android {
     }
 
     tasks.configureEach {
-        if (name == 'preReleaseBuild') {
+        if (name == 'preReleaseBuild' && unsignedRelease == null) {
             dependsOn requireReleaseSigning
         }
         if ((name.startsWith('merge') && name.endsWith('Assets')) || name.toLowerCase().contains('lint')) {

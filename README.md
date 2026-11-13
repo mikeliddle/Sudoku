@@ -360,7 +360,7 @@ Create your private signing key once on Windows, then build:
 
 The signed, non-debuggable APK is
 `app\build\outputs\apk\release\app-release.apk`.
-Release builds require the private signing properties and keystore;
+Normal local release builds require the private signing properties and keystore;
 they do not fall back to a debug key. A source recipient must create their own
 key rather than receive the publisher's private key.
 
@@ -388,6 +388,60 @@ On the downloading device, open the APK and, if required, allow app installation
 from that specific browser/file manager in Android's settings. Turn that
 permission off afterward if desired. Do not bypass Play Protect or other
 unsafe-app warnings. Publish a SHA-256 checksum alongside the APK.
+
+### GitHub-hosted builds and owner approval
+
+The **Android release** workflow is manually dispatched on `main`. Choose
+`verify` (the default) to run JVM tests, release lint and a secret-free unsigned
+release build. This mode does not request signing approval or publish anything.
+It uses Windows hosted runners to match the reviewed dependency-checksum baseline.
+The unsigned build command is explicitly:
+
+```powershell
+.\gradlew.bat --no-daemon --dependency-verification strict -PunsignedRelease=true engineTest :app:assembleRelease :app:lintRelease
+```
+
+Its output is `app\build\outputs\apk\release\app-release-unsigned.apk`, not a
+distributable/installable release. Omitting that property still requires the
+private local release key; it never falls back to debug signing.
+
+To publish later, review/update `versionName` and increment `versionCode`, then
+dispatch `release` on current protected `main` as **mikeliddle**. Inspect the exact
+source commit and successful build before approving `android-release` in GitHub.
+Only **mikeliddle** is a required release reviewer; admin bypass is disabled.
+Self-review is deliberately allowed. The signing and publishing jobs both use
+this environment; approve the later publishing job too if GitHub requests it.
+No agent should approve either on your behalf.
+
+The environment holds `ANDROID_KEYSTORE_BASE64`, `ANDROID_STORE_PASSWORD`,
+`ANDROID_KEY_PASSWORD` and `ANDROID_KEY_ALIAS`. These were provisioned from the
+existing private public-release key, not the debug key. Keep the protected local
+backup: GitHub secrets are not a recoverable key backup. Never paste key material
+or passwords into chat, issues, workflow inputs, or repository files.
+The expected public signing-certificate SHA-256 is:
+
+```text
+5f5586f9864347814393fdfa2cc5f94ab9254c44a61742ab105c29760056f2e6
+```
+
+Signing uses no source checkout, project scripts or Gradle. Its Google
+build-tools 36.0.0 Windows archive is pinned to SHA-256
+`aa1095cb14d83e483818a748a2c06faaeb8e601561b06a356a119a1b2ca280d3`
+(also checked against Google's repository metadata SHA-1
+`f16ccffd34de8790dede813a6c7d8e2c11a27b50` when pinned).
+Artifact ZIP digests and APK checksums are verified between jobs; the final
+certificate, package/version, alignment and nondebuggable/no-permission manifest
+are checked before publication. Publication creates `v<versionName>` at the exact
+reviewed commit, with the APK and `SHA256SUMS.txt`; it refuses existing tags.
+There is no arbitrary tag/ref input. Main changing while approvals are pending
+fails closed: review and start a fresh run.
+
+The owner can still change repository/environment protections. Main is
+administrator-write-only (currently just mikeliddle), force-push/deletion is
+blocked, and `v*` tags cannot be rewritten. A personal-repository API limitation
+prevented a GitHub Actions bypass for tag-creation restrictions; current writer
+access and the publishing environment gate provide that boundary instead.
+See `SECURITY.md` for the precise trust model and action allowlist policy.
 
 ## License and privacy
 
